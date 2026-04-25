@@ -28,7 +28,7 @@ local sideNames = {
 }
  
 -- 流体 ID 和输出量配置 (0-7，每个信号对应多个流体 ID 和流量)
-local fluidMapping = {
+local fluids_by_signal = {
   [0] = {{id = "supercoolant", amount = 10000}},           -- 10000L超级冷却液
   [1] = {{id = "helium", amount = 10000}},                 -- 10000L氦
   [2] = {{id = superconductor, amount = 1440}},            -- 1440L超导
@@ -122,31 +122,28 @@ local function main()
           lastSuccessRate = successRate
  
           if successRate >= 100 then
-            -- Success rate reached 100%, wait for the next cycle and clear transfer records.
             print("Success rate reached 100%, waiting for next cycle.")
             fluidTransferred = {}  -- 娓呯┖娴佷綋杞繍璁板綍
           else
             -- 如果成功率小于100，则根据红石信号执行流体传输操作
-            if fluidMapping[signalStrength] then
-              print("信号对应的流体配置:")
-              for _, fluidInfo in ipairs(fluidMapping[signalStrength]) do
+            if fluids_by_signal[signalStrength] then
+              print("  Start transferring fluids:")
+              for _, fluidInfo in ipairs(fluids_by_signal[signalStrength]) do
                 local fluidId = fluidInfo.id
                 local amount = fluidInfo.amount
- 
                 -- 如果流体已转运过，则跳过
                 if fluidTransferred[fluidId] then
-                  print(string.format("流体 %s 已经转运过,跳过", fluidId))
+                  print(string.format("    流体 %s 已经转运过,跳过", fluidId))
                 else
                   local fluidSide, slot = findFluidSlot(fluidId, amount)
- 
                   if fluidSide and slot then
                     local success = transposer.transferFluid(fluidSide, targetSide, amount, slot)
                     if success then
-                      print(string.format("流体 %s 传输成功 (%d mB)", fluidId, amount))
+                      print(string.format("    流体 %s 传输成功 (%d L)", fluidId, amount))
                       fluidTransferred[fluidId] = true  -- 记录已转运的流体
                     end
                   else
-                    print(string.format("流体 %s 不足,请检查库存 (%d mB)", fluidId, amount))
+                    print(string.format("    流体 %s 不足,请检查库存 (need %d L)", fluidId, amount))
                   end
                 end
               end
