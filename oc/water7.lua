@@ -1,4 +1,4 @@
-local os = require("os")
+﻿local os = require("os")
 local component = require("component")
 local sides = require("sides")
 local term = require("term")
@@ -86,7 +86,6 @@ end
  
 local function main()
   local lastSignalStrength = -1
-  local lastSuccessRate = -1
   local fluidTransferred = {}  -- Fluids that have already been transferred successfully.
  
   while true do
@@ -113,36 +112,30 @@ local function main()
  
       if workProgress > 1 and info[2] ~= nil then
         local successRate = tonumber(string.match(info[2], "%d+"))
-        
-        -- Check even if the success rate has not changed.
-        if successRate ~= lastSuccessRate or successRate < 100 then
-          print("Current success rate: " .. successRate .. "%")
-          lastSuccessRate = successRate
  
-          if successRate >= 100 then
-            print("Success rate reached 100%, waiting for next cycle.")
-            fluidTransferred = {}
-          else
-            -- If the success rate is below 100, transfer fluids based on the redstone signal.
-            if fluids_by_signal[signalStrength] then
-              print("  Start transferring fluids:")
-              for _, fluidInfo in ipairs(fluids_by_signal[signalStrength]) do
-                local fluidId = fluidInfo.id
-                local amount = fluidInfo.amount
-                -- Skip fluids that have already been transferred.
-                if fluidTransferred[fluidId] then
-                  print(string.format("    Fluid %s has already been transferred, skipping", fluidId))
-                else
-                  local fluidSide, slot = findFluidSlot(fluidId, amount)
-                  if fluidSide and slot then
-                    local success = transposer.transferFluid(fluidSide, targetSide, amount, slot)
-                    if success then
-                      print(string.format("    Fluid %s transferred successfully (%d L)", fluidId, amount))
-                      fluidTransferred[fluidId] = true  -- Record the transferred fluid.
-                    end
-                  else
-                    print(string.format("    Not enough fluid %s, please check stock (need %d L)", fluidId, amount))
+        if successRate >= 100 then
+          print("Success rate reached " .. successRate .. "%, waiting for next cycle.")
+          fluidTransferred = {}
+        else
+          -- If the success rate is below 100, transfer fluids based on the redstone signal.
+          if fluids_by_signal[signalStrength] then
+            print("  Start transferring fluids:")
+            for _, fluidInfo in ipairs(fluids_by_signal[signalStrength]) do
+              local fluidId = fluidInfo.id
+              local amount = fluidInfo.amount
+              -- Skip fluids that have already been transferred.
+              if fluidTransferred[fluidId] then
+                print(string.format("    Fluid %s has already been transferred, skipping", fluidId))
+              else
+                local fluidSide, slot = findFluidSlot(fluidId, amount)
+                if fluidSide and slot then
+                  local success = transposer.transferFluid(fluidSide, targetSide, amount, slot)
+                  if success then
+                    print(string.format("    Fluid %s transferred successfully (%d L)", fluidId, amount))
+                    fluidTransferred[fluidId] = true  -- Record the transferred fluid.
                   end
+                else
+                  print(string.format("    Not enough fluid %s, please check stock (need %d L)", fluidId, amount))
                 end
               end
             end
