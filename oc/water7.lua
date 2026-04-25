@@ -101,15 +101,15 @@ local function main()
       fluidTransferred = {}  -- Clear transfer records when the redstone signal changes.
     end
 
-    print("Time: " .. os.date("%H:%M:%S"))
- 
+    local workProgress = gtm.getWorkProgress()  
+    print(string.format("Work progress: %.2f s", workProgress / 20))
+
     if signalStrength >= 8 then
       print("  Bit #4 is set. Standby..")
       os.sleep(30)
     else
       -- Get the success rate.
       local info = gtm.getSensorInformation()
-      local workProgress = gtm.getWorkProgress()  
  
       if workProgress > 1 and info[2] ~= nil then
         local successRate = tonumber(string.match(info[2], "%d+"))
