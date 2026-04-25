@@ -102,12 +102,8 @@ local function main()
     end
  
     if signalStrength >= 8 then
-      print("位 4 开启 待机中")
-      -- 在信号大于 8 时，继续保持状态直到信号变化
-      while redstone.getInput(inputSide) >= 8 do
-        os.sleep(5)
-      end
-      term.clear()
+      print("  Bit #4 is set. Standby..")
+      os.sleep(30)
     else
       -- 获取成功率
       local info = gtm.getSensorInformation()
@@ -123,7 +119,7 @@ local function main()
  
           if successRate >= 100 then
             print("Success rate reached 100%, waiting for next cycle.")
-            fluidTransferred = {}  -- 娓呯┖娴佷綋杞繍璁板綍
+            fluidTransferred = {}
           else
             -- 如果成功率小于100，则根据红石信号执行流体传输操作
             if fluids_by_signal[signalStrength] then
