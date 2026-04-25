@@ -12,11 +12,20 @@ local UEV = "molten.superconductoruevbase"
 local UIV = "molten.superconductoruivbase"
 local UMV = "molten.superconductorumvbase"
  
--- 请设置输入红石信号的方向和流体输出方向!!
+-- 设置输入红石信号的方向和流体输出方向
 local inputSide = sides.down                      -- 红石信号输入方向
 local fluidInputSides = {sides.north, sides.up}   -- 两个流体输入方向
 local targetSide = sides.down                     -- 流体输出方向
 local superconductor = UHV   -- 超导的等级
+
+local sideNames = {
+  [sides.down] = "down",
+  [sides.up] = "up",
+  [sides.north] = "north",
+  [sides.south] = "south",
+  [sides.west] = "west",
+  [sides.east] = "east"
+}
  
 -- 流体 ID 和输出量配置 (0-7，每个信号对应多个流体 ID 和流量)
 local fluidMapping = {
@@ -34,6 +43,34 @@ local fluidMapping = {
          {id = superconductor, amount = 1440},
          {id = "molten.neutronium", amount = 4608}} 
 }
+
+-- 打印转运器能读到的流体
+local function printReadableFluids()
+  print("可读取的流体:")
+
+  for _, fluidSide in ipairs(fluidInputSides) do
+    local sideName = sideNames[fluidSide] or tostring(fluidSide)
+    local tankCount = transposer.getTankCount(fluidSide)
+
+    print(string.format("方向 %s: %s 个流体槽", sideName, tostring(tankCount)))
+
+    for tank = 1, tankCount do
+      local fluidInfo = transposer.getFluidInTank(fluidSide, tank)
+
+      if fluidInfo and fluidInfo.name then
+        print(string.format(
+          "  tank %d: %s = %d / %d mB",
+          tank,
+          fluidInfo.name,
+          fluidInfo.amount or 0,
+          fluidInfo.capacity or 0
+        ))
+      else
+        print(string.format("  tank %d: empty", tank))
+      end
+    end
+  end
+end
  
 -- 寻找流体槽位并检查流体是否足够
 local function findFluidSlot(fluidId, requiredAmount)
@@ -62,6 +99,7 @@ local function main()
       term.clear()
       print("检测红石信号中...")
       print("当前红石信号强度: " .. signalStrength)
+      printReadableFluids()
       lastSignalStrength = signalStrength  -- 更新上一次的信号值
       fluidTransferred = {}  -- 红石信号改变时清空表格
     end
