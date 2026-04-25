@@ -65,8 +65,6 @@ local function printReadableFluids()
           fluidInfo.amount or 0,
           fluidInfo.capacity or 0
         ))
-      else
-        print(string.format("  tank %d: empty", tank))
       end
     end
   end
@@ -97,8 +95,7 @@ local function main()
     
     if signalStrength ~= lastSignalStrength then
       term.clear()
-      print("检测红石信号中...")
-      print("当前红石信号强度: " .. signalStrength)
+      print("Red Stone Signal Changed: " .. lastSignalStrength .. " -> " .. signalStrength)
       printReadableFluids()
       lastSignalStrength = signalStrength  -- 更新上一次的信号值
       fluidTransferred = {}  -- 红石信号改变时清空表格
@@ -124,7 +121,11 @@ local function main()
           print("当前成功率: " .. successRate .. "%")
           lastSuccessRate = successRate
  
-          if successRate < 100 then
+          if successRate >= 100 then
+            -- Success rate reached 100%, wait for the next cycle and clear transfer records.
+            print("Success rate reached 100%, waiting for next cycle.")
+            fluidTransferred = {}  -- 娓呯┖娴佷綋杞繍璁板綍
+          else
             -- 如果成功率小于100，则根据红石信号执行流体传输操作
             if fluidMapping[signalStrength] then
               print("信号对应的流体配置:")
@@ -150,10 +151,6 @@ local function main()
                 end
               end
             end
-          else
-            -- 如果成功率已达到 100% 持续待机并清空记录表格
-            print("成功率已达到 100% 等待下一次变化。")
-            fluidTransferred = {}  -- 清空流体转运记录
           end
         end
       end
