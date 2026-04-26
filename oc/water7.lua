@@ -159,9 +159,9 @@ local function main()
                 else
                   local fluidSide, slot = findFluidSlot(fluidId, amount)
                   if fluidSide and slot then
-                    local success = transposer.transferFluid(fluidSide, targetSide, amount, slot)
+                    local success, transferredAmount = transposer.transferFluid(fluidSide, targetSide, amount, slot)
                     if success then
-                      print(string.format("    Fluid transferred successfully: %s (%d L)", fluidId, amount))
+                      print(string.format("    Fluid transferred successfully: %s requested %d L, transferred %d L", fluidId, amount, transferredAmount))
                       fluidTransferred[fluidId] = true  -- Record the transferred fluid.
                     end
                   else
