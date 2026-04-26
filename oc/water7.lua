@@ -83,7 +83,27 @@ local function findFluidSlot(fluidId, requiredAmount)
   end
   return nil, nil
 end
- 
+
+local function is_all_fluid_available()
+  local max_required_by_fluid = {}
+
+  for _, fluids in pairs(fluids_by_signal) do
+    for _, fluidInfo in ipairs(fluids) do
+      local currentMax = max_required_by_fluid[fluidInfo.id] or 0
+      max_required_by_fluid[fluidInfo.id] = math.max(currentMax, fluidInfo.amount)
+    end
+  end
+
+  for fluidId, requiredAmount in pairs(max_required_by_fluid) do
+    local fluidSide, slot = findFluidSlot(fluidId, requiredAmount)
+    if not fluidSide or not slot then
+      return false, fluidId, requiredAmount
+    end
+  end
+
+  return true
+end
+  
 local function main()
   local lastSignalStrength = -1
   local fluidTransferred = {}  -- Fluids that have already been transferred successfully.
@@ -103,39 +123,50 @@ local function main()
     local workProgress = gtm.getWorkProgress()  
     print(string.format("Work progress: %.2f s", workProgress / 20))
 
-    if signalStrength >= 8 then
-      print("  Bit #4 is set. Standby..")
-      os.sleep(30)
+    local allFluidsAvailable, missingFluidId, requiredAmount = is_all_fluid_available()
+    if not allFluidsAvailable then
+      print(string.format("Missing fluid for max signal check: %s (need %d L)", missingFluidId, requiredAmount))
+      print("Shutting down")
+      gtm.setWorkAllowed(false)
+      os.sleep(120)
     else
-      -- Get the success rate.
-      local info = gtm.getSensorInformation()
- 
-      if workProgress > 1 and info[2] ~= nil then
-        local successRate = tonumber(string.match(info[2], "%d+"))
- 
-        if successRate >= 100 then
-          print("Success rate reached " .. successRate .. "%, waiting for next cycle.")
-          fluidTransferred = {}
-        else
-          -- If the success rate is below 100, transfer fluids based on the redstone signal.
-          if fluids_by_signal[signalStrength] then
-            print("  Start transferring fluids:")
-            for _, fluidInfo in ipairs(fluids_by_signal[signalStrength]) do
-              local fluidId = fluidInfo.id
-              local amount = fluidInfo.amount
-              -- Skip fluids that have already been transferred.
-              if fluidTransferred[fluidId] then
-                print(string.format("    Fluid %s has already been transferred, skipping", fluidId))
-              else
-                local fluidSide, slot = findFluidSlot(fluidId, amount)
-                if fluidSide and slot then
-                  local success = transposer.transferFluid(fluidSide, targetSide, amount, slot)
-                  if success then
-                    print(string.format("    Fluid %s transferred successfully (%d L)", fluidId, amount))
-                    fluidTransferred[fluidId] = true  -- Record the transferred fluid.
-                  end
+      print("All fluids available")
+      gtm.setWorkAllowed(true)
+
+      if signalStrength >= 8 then
+        print("  Bit #4 is set. Standby..")
+        os.sleep(30)
+      else
+        -- Get the success rate.
+        local info = gtm.getSensorInformation()
+  
+        if workProgress > 1 and info[2] ~= nil then
+          local successRate = tonumber(string.match(info[2], "%d+"))
+          print("Success rate = " .. successRate .. "%")
+          if successRate >= 100 then
+            print("waiting for next cycle.")
+            fluidTransferred = {}
+          else
+            -- If the success rate is below 100, transfer fluids based on the redstone signal.
+            if fluids_by_signal[signalStrength] then
+              print("  Start transferring fluids:")
+              for _, fluidInfo in ipairs(fluids_by_signal[signalStrength]) do
+                local fluidId = fluidInfo.id
+                local amount = fluidInfo.amount
+                -- Skip fluids that have already been transferred.
+                if fluidTransferred[fluidId] then
+                  print(string.format("    Fluid %s has already been transferred, skipping", fluidId))
                 else
-                  print(string.format("    Not enough fluid %s, please check stock (need %d L)", fluidId, amount))
+                  local fluidSide, slot = findFluidSlot(fluidId, amount)
+                  if fluidSide and slot then
+                    local success = transposer.transferFluid(fluidSide, targetSide, amount, slot)
+                    if success then
+                      print(string.format("    Fluid transferred successfully: %s (%d L)", fluidId, amount))
+                      fluidTransferred[fluidId] = true  -- Record the transferred fluid.
+                    end
+                  else
+                    print(string.format("    Not enough fluid, please check stock. Need: %s (%d L)", fluidId, amount))
+                  end
                 end
               end
             end
@@ -143,7 +174,6 @@ local function main()
         end
       end
     end
- 
     os.sleep(5)
   end
 end
