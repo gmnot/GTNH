@@ -6,27 +6,27 @@ local os = require("os")
 -- 缓存阈值支持单位后缀: k=千(10^3), m=百万(10^6), g=十亿(10^9), t=万亿(10^12)
 local FLUID_CONFIGS = {       
     {"liquidair", "1g", 8, 2},
-    -- {"helium", "8g", 5, 4},
-    -- {"fluorine", "4g", 7, 2},
-    -- {"hydrofluoricacid_gt5u", "4g", 7, 1},
-    -- {"sulfuricacid", "8g", 4, 1},
-    -- {"oil", "100m", 4, 3},
-    -- {"ic2distilledwater", "8g", 8, 5},
-    -- {"chlorobenzene", "100m", 2, 1},
-    -- {"helium-3", "8g", 5, 2},
-    -- {"deuterium", "8g", 6, 1},
-    -- {"tritium", "8g", 6, 2},
-    -- {"lava", "1g", 3, 3},
-    -- {"methane", "8g", 5, 9},
-    -- {"ethylene", "100m", 6, 5},
-    -- {"molten.iron", "8g", 4, 2},
-    -- {"molten.copper", "8g", 8, 3},
+    {"helium", "1g", 5, 4},
+    {"fluorine", "4g", 7, 2},
+    {"hydrofluoricacid_gt5u", "4g", 7, 1},
+    {"sulfuricacid", "1g", 4, 1},
+    {"oil", "1g", 4, 3},
+    {"ic2distilledwater", "6g", 8, 5},
+    {"chlorobenzene", "100m", 2, 1},
+    {"helium-3", "6g", 5, 2},
+    {"deuterium", "6g", 6, 1},
+    {"tritium", "6g", 6, 2},
+    {"lava", "1g", 3, 3},
+    {"methane", "1g", 5, 9},
+    {"ethylene", "2g", 6, 5},
+    {"molten.iron", "6g", 4, 2},
+    {"molten.copper", "6g", 8, 3},
     -- {"molten.tin", "100m", 8, 7},
     -- {"molten.lead", "100m", 4, 5},
-    -- {"argon", "100m", 5, 7},
-    -- {"radon", "8g", 8, 6},
-    -- {"krypton", "100m", 5, 8},
-    -- {"xenon", -1, 6, 4},
+    {"argon", "100m", 5, 7},
+    {"radon", "2g", 8, 6},
+    {"krypton", "100m", 5, 8},
+    {"xenon", "2g", 6, 4},
     -- 在此处添加更多流体配置，按优先级从高到低排列
 }
  
@@ -40,7 +40,7 @@ local MACHINES = {
 local AUTO_DISCOVER_MACHINES = true
 local DEFAULT_MACHINE_LEVEL = 1
 
-local CHECK_INTERVAL = 30
+local CHECK_INTERVAL = 15
  
 ----函数部分
 local function parseNumberWithSuffix(value)
