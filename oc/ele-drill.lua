@@ -127,8 +127,8 @@ local function anyFluidNeedsRefill(ignoreFluid)
     return false, nil
 end
 local function safelyStopMachine(machine)
+    machine.setWorkAllowed(false)
     if machine.isMachineActive() then
-        machine.setWorkAllowed(false)
         local maxWait = 60
         local waitCount = 0
         while machine.isMachineActive() and waitCount < maxWait do os.sleep(1) waitCount = waitCount + 1 end
@@ -208,6 +208,7 @@ local function checkAllFluids()
             end
         end
         print("所有流体库存充足，无需调整")
+        safelyStopAllMachines()
     end
     return false
 end
