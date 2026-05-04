@@ -37,6 +37,9 @@ local MACHINES = {
 }
  
 -- 检测间隔(秒)
+local AUTO_DISCOVER_MACHINES = true
+local DEFAULT_MACHINE_LEVEL = 1
+
 local CHECK_INTERVAL = 30
  
 ----函数部分
@@ -73,18 +76,37 @@ for _, config in ipairs(FLUID_CONFIGS) do
     table.insert(PROCESSED_FLUID_CONFIGS, {config[1], threshold, config[3], config[4]})
 end
 local gt_machines = {}
+local machineAddresses = {}
 local machineCount = 0
 local machineLevels = {}
+
+if AUTO_DISCOVER_MACHINES then
+    for address in component.list("gt_machine", true) do
+        local success, machine = pcall(component.proxy, address)
+        if success and machine and machine.type == "gt_machine" then
+            table.insert(gt_machines, machine)
+            table.insert(machineAddresses, address)
+            machineLevels[address] = DEFAULT_MACHINE_LEVEL
+            machineCount = machineCount + 1
+            print("Found machine: " .. address .. " (level " .. DEFAULT_MACHINE_LEVEL .. ")")
+        end
+    end
+end
+
 for _, machineInfo in ipairs(MACHINES) do
     local address = machineInfo[1]
     local level = machineInfo[2] or 1
+    if address ~= "address" and not machineLevels[address] then
     local success, machine = pcall(component.proxy, address)
     if success and machine and machine.type == "gt_machine" then
         table.insert(gt_machines, machine)
+        table.insert(machineAddresses, address)
         machineLevels[address] = level
         machineCount = machineCount + 1
         print("找到机器: " .. address .. " (等级 " .. level .. ")")
     else print("警告: 无法访问机器 " .. address) end
+end
+    if address ~= "address" and machineLevels[address] then machineLevels[address] = level end
 end
 if machineCount == 0 then print("错误：未找到任何可用的太空钻机，脚本终止") os.exit() end
 print("成功初始化 " .. machineCount .. " 台钻机")
@@ -147,7 +169,7 @@ end
 local function adjustAllMachinesParameters(param1, param2)
     local successCount = 0
     for i, machine in ipairs(gt_machines) do
-        local address = tostring(machine.address)
+        local address = machineAddresses[i] or tostring(machine.address)
         local level = machineLevels[address] or 1
         local success
         if level == 1 then success = adjustMachineParametersLevel1(machine, param1, param2)
@@ -195,7 +217,7 @@ local function main()
     print("监控流体数量: " .. #PROCESSED_FLUID_CONFIGS)
     print("管理机器数量: " .. #gt_machines)
     for i, machine in ipairs(gt_machines) do
-        local address = tostring(machine.address)
+        local address = machineAddresses[i] or tostring(machine.address)
         local level = machineLevels[address] or 1
         print(string.format("机器 %d: 等级 %d", i, level))
     end
