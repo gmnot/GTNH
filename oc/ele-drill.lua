@@ -1,4 +1,4 @@
-local component = require("component")
+﻿local component = require("component")
 local os = require("os")
  
 --          配置区域（可修改）
@@ -6,27 +6,29 @@ local os = require("os")
 -- 缓存阈值支持单位后缀: k=千(10^3), m=百万(10^6), g=十亿(10^9), t=万亿(10^12)
 local FLUID_CONFIGS = {       
     {"liquidair", "1g", 8, 2},
-    {"helium", "1g", 5, 4},
+    {"molten.copper", "6g", 8, 3},
+    {"molten.iron", "6g", 4, 2},
     {"fluorine", "4g", 7, 2},
     {"hydrofluoricacid_gt5u", "4g", 7, 1},
+    {"ic2distilledwater", "6g", 8, 5},
+    {"saltwater", "6g", 5, 3},
     {"sulfuricacid", "1g", 4, 1},
     {"oil", "1g", 4, 3},
-    {"ic2distilledwater", "6g", 8, 5},
-    {"chlorobenzene", "100m", 2, 1},
+    {"helium", "1g", 5, 4},
     {"helium-3", "6g", 5, 2},
     {"deuterium", "6g", 6, 1},
     {"tritium", "6g", 6, 2},
+    {"ammonia", "6g", 6, 3},
+    {"ethylene", "2g", 6, 5},
     {"lava", "1g", 3, 3},
     {"methane", "1g", 5, 9},
-    {"ethylene", "2g", 6, 5},
-    {"molten.iron", "6g", 4, 2},
-    {"molten.copper", "6g", 8, 3},
     -- {"molten.tin", "100m", 8, 7},
     -- {"molten.lead", "100m", 4, 5},
     {"argon", "100m", 5, 7},
     {"radon", "2g", 8, 6},
     {"krypton", "100m", 5, 8},
     {"xenon", "2g", 6, 4},
+    {"chlorobenzene", "100m", 2, 1},
     -- 在此处添加更多流体配置，按优先级从高到低排列
 }
  
@@ -121,7 +123,7 @@ local function anyFluidNeedsRefill(ignoreFluid)
         local threshold = config[2]
         if threshold ~= -1 and fluidName ~= ignoreFluid then
             local amount = getFluidAmount(fluidName)
-            if amount < threshold then return true, fluidName end
+            if amount < threshold then return true, fluidName, amount, threshold end
         end
     end
     return false, nil
@@ -180,9 +182,9 @@ local function adjustAllMachinesParameters(param1, param2)
     return successCount
 end
 local function checkAllFluids()
-    local needsRefill, refillFluid = anyFluidNeedsRefill()
+    local needsRefill, refillFluid, currentAmount, targetAmount = anyFluidNeedsRefill()
     if needsRefill then
-        print(string.format("检测到需要补充的流体: %s", refillFluid))
+        print(string.format("检测到需要补充的流体: %s, 当前 %s / 目标 %s", refillFluid, formatNumberReadable(currentAmount), formatNumberReadable(targetAmount)))
         for _, config in ipairs(PROCESSED_FLUID_CONFIGS) do
             local fluidName = config[1]
             local threshold = config[2]

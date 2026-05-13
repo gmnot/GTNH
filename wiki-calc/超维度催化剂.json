@@ -1,0 +1,123 @@
+{
+  "machineConfigs": [
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {},
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {},
+    {
+      "machineId": "压缩核聚变反应堆"
+    },
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {
+      "machineId": "压缩核聚变反应堆"
+    },
+    {
+      "machineId": "压缩核聚变反应堆"
+    },
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    },
+    {},
+    {
+      "machineId": "压缩核聚变反应堆"
+    },
+    {},
+    {
+      "machineId": "压缩核聚变反应堆",
+      "upgrades": {
+        "machineTier": 3
+      }
+    }
+  ],
+  "selectedBranches": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "env": [],
+  "start": [
+    {
+      "name": "激发的粗制超维度催化剂",
+      "amount": 0
+    },
+    {
+      "name": "激发的平凡超维度催化剂",
+      "amount": 0
+    },
+    {
+      "name": "激发的光辉超维度催化剂",
+      "amount": -920
+    },
+    {
+      "name": "激发的异星超维度催化剂",
+      "amount": 0
+    },
+    {
+      "name": "激发的恒星超维度催化剂",
+      "amount": 0
+    }
+  ]
+}
