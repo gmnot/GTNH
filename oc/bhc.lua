@@ -33,8 +33,19 @@ gpu.setForeground(0x00FF00)
 local timerID = require("event").timer(0.5, function()
     local line = string.format("状态：%s", status)
     gpu.set(1, 2, line .. string.rep(" ", math.max(0, 32 - #line)))
-    line = getInfo()
-    gpu.set(1, 3, line .. string.rep(" ", math.max(0, 32 - #line)))
+    local info = getInfo()
+    if type(info) == "table" then
+        for i=1,8 do
+            line = info[i] or ""
+            gpu.set(1, i + 2, line .. string.rep(" ", math.max(0, 32 - #line)))
+        end
+    else
+        line = info or ""
+        gpu.set(1, 3, line .. string.rep(" ", math.max(0, 32 - #line)))
+        for i=4,10 do
+            gpu.set(1, i, string.rep(" ", 32))
+        end
+    end
 end, math.huge)
 gpu.set(1, 1, "黑洞数量："..tostring(#machineList).."                     ")
 for i=2,10 do
@@ -54,6 +65,45 @@ local function getAnyProgress()
         end
     end
     return false
+end
+
+local function formatStack(stack, amountKey)
+    if stack == nil then
+        return "none"
+    end
+    local label = stack.label or stack.name or "unknown"
+    local amount = stack[amountKey] or stack.size or stack.amount or 0
+    return tostring(label).." x"..tostring(amount)
+end
+
+local function getProgressLines()
+    local lines = {"Progress:"}
+    for i, address in ipairs(machineList) do
+        if #lines >= 3 then
+            break
+        end
+        local progress = component.invoke(address, "getWorkProgress")
+        local max = component.invoke(address, "getWorkMaxProgress")
+        table.insert(lines, "M"..tostring(i)..": "..tostring(progress).."/"..tostring(max))
+    end
+    return lines
+end
+
+local function getStabilityInfo()
+    local items = me_controller.getItemsInNetwork()
+    local fluids = me_controller.getFluidsInNetwork()
+    local lines = {
+        "等待稳定度下降 ("..tostring(math.floor(computer.uptime() - time1)).."/90)",
+        "Items: "..tostring(#items),
+        formatStack(items[1], "size"),
+        "Fluids: "..tostring(#fluids),
+        formatStack(fluids[1], "amount")
+    }
+    local progressLines = getProgressLines()
+    for _, line in ipairs(progressLines) do
+        table.insert(lines, line)
+    end
+    return lines
 end
  
 local function turnOff()
@@ -100,7 +150,7 @@ local function main()
             setWorkAllowed(true)
             status = "[运行中]"
             time1 = computer.uptime()
-            getInfo = function() return "等待稳定度下降 ("..tostring(math.floor(computer.uptime() - time1)).."/90)" end
+            getInfo = getStabilityInfo
             while computer.uptime() < time1 + 90 do
                 os.sleep(1)
                 if me_controller.getItemsInNetwork()[1] == nil and me_controller.getFluidsInNetwork()[1] == nil then
