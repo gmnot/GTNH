@@ -4,10 +4,10 @@ local sides = require("sides")
  
 -- ================= 方向配置 =================
 local rsSideSpcaeTime = sides.south  -- 时空红石信号输出方向
-local sourceSide = sides.up         -- 转运输入方向
-local targetSide = sides.down       -- 转运输出方向
-local seedSlot = 1                  -- 黑洞种子的槽位
-local collapseSlot = 2              -- 黑洞坍缩器的槽位
+local sourceSide = sides.up          -- 转运输入方向
+local targetSide = sides.down        -- 转运输出方向
+local seedSlot = 1                   -- 黑洞种子的槽位
+local collapseSlot = 2               -- 黑洞坍缩器的槽位
  
  
 local maxTime = 300                 -- 黑洞稳定时间过长，重启黑洞的时间
