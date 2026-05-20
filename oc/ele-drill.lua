@@ -13,6 +13,7 @@ local FLUID_CONFIGS = {
     {"ic2distilledwater", "6g", 8, 5},
     {"saltwater", "6g", 5, 3},
     {"sulfuricacid", "1g", 4, 1},
+    {"liquid_heavy_oil", "1g", 4, 4},
     {"oil", "1g", 4, 3},
     {"helium", "1g", 5, 4},
     {"helium-3", "6g", 5, 2},
