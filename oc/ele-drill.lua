@@ -6,10 +6,11 @@ local os = require("os")
 -- 缓存阈值支持单位后缀: k=千(10^3), m=百万(10^6), g=十亿(10^9), t=万亿(10^12)
 local FLUID_CONFIGS = {       
     {"liquidair", "1g", 8, 2},
-    {"molten.copper", "6g", 8, 3},
-    {"molten.iron", "6g", 4, 2},
+    {"molten.copper", "30g", 8, 3},
+    {"molten.iron", "4g", 4, 2},
     {"fluorine", "4g", 7, 2},
     {"hydrofluoricacid_gt5u", "4g", 7, 1},
+    {"oxygen", "4g", 7, 4},
     {"ic2distilledwater", "6g", 8, 5},
     {"saltwater", "6g", 5, 3},
     {"sulfuricacid", "1g", 4, 1},
@@ -30,6 +31,9 @@ local FLUID_CONFIGS = {
     {"krypton", "100m", 5, 8},
     {"xenon", "2g", 6, 4},
     {"chlorobenzene", "100m", 2, 1},
+    {"endergoo", "100m", 3, 1},
+    {"molten.copper", "30g", 8, 3},
+    {"molten.iron", "30g", 4, 2},
     -- 在此处添加更多流体配置，按优先级从高到低排列
 }
  
@@ -41,9 +45,9 @@ local MACHINES = {
  
 -- 检测间隔(秒)
 local AUTO_DISCOVER_MACHINES = true
-local DEFAULT_MACHINE_LEVEL = 1
+local DEFAULT_MACHINE_LEVEL = 2
 
-local CHECK_INTERVAL = 15
+local CHECK_INTERVAL = 20
  
 ----函数部分
 local function parseNumberWithSuffix(value)
@@ -82,16 +86,23 @@ local gt_machines = {}
 local machineAddresses = {}
 local machineCount = 0
 local machineLevels = {}
+local discoveredMachines = {}
+
+local function getMachineAddress(machine, fallbackAddress)
+    return machine.address or fallbackAddress
+end
 
 if AUTO_DISCOVER_MACHINES then
     for address in component.list("gt_machine", true) do
         local success, machine = pcall(component.proxy, address)
         if success and machine and machine.type == "gt_machine" then
+            local machineAddress = getMachineAddress(machine, address)
             table.insert(gt_machines, machine)
-            table.insert(machineAddresses, address)
-            machineLevels[address] = DEFAULT_MACHINE_LEVEL
+            table.insert(machineAddresses, machineAddress)
+            discoveredMachines[machineAddress] = true
+            machineLevels[machineAddress] = DEFAULT_MACHINE_LEVEL
             machineCount = machineCount + 1
-            print("Found machine: " .. address .. " (level " .. DEFAULT_MACHINE_LEVEL .. ")")
+            print("Found machine: " .. machineAddress .. " (level " .. DEFAULT_MACHINE_LEVEL .. ")")
         end
     end
 end
@@ -99,17 +110,20 @@ end
 for _, machineInfo in ipairs(MACHINES) do
     local address = machineInfo[1]
     local level = machineInfo[2] or 1
-    if address ~= "address" and not machineLevels[address] then
-    local success, machine = pcall(component.proxy, address)
-    if success and machine and machine.type == "gt_machine" then
-        table.insert(gt_machines, machine)
-        table.insert(machineAddresses, address)
-        machineLevels[address] = level
-        machineCount = machineCount + 1
-        print("找到机器: " .. address .. " (等级 " .. level .. ")")
-    else print("警告: 无法访问机器 " .. address) end
-end
-    if address ~= "address" and machineLevels[address] then machineLevels[address] = level end
+    if address ~= "address" then
+        local success, machine = pcall(component.proxy, address)
+        if success and machine and machine.type == "gt_machine" then
+            local machineAddress = getMachineAddress(machine, address)
+            if not discoveredMachines[machineAddress] then
+                table.insert(gt_machines, machine)
+                table.insert(machineAddresses, machineAddress)
+                discoveredMachines[machineAddress] = true
+                machineCount = machineCount + 1
+            end
+            machineLevels[machineAddress] = level
+            print("找到机器: " .. machineAddress .. " (等级 " .. level .. ")")
+        else print("警告: 无法访问机器 " .. address) end
+    end
 end
 if machineCount == 0 then print("错误：未找到任何可用的太空钻机，脚本终止") os.exit() end
 print("成功初始化 " .. machineCount .. " 台钻机")
