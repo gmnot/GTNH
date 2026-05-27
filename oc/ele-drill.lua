@@ -1,12 +1,100 @@
 ﻿local component = require("component")
 local os = require("os")
+
+local rawPrint = print
+local gpu = component.isAvailable("gpu") and component.gpu or nil
+local DISPLAY_WIDTH = 48
+local DISPLAY_HEIGHT = 15
+local displayLines = {}
+
+local function utf8CharLength(byte)
+    if byte < 0x80 then return 1
+    elseif byte < 0xE0 then return 2
+    elseif byte < 0xF0 then return 3
+    else return 4 end
+end
+
+local function utf8CharWidth(byte)
+    if byte < 0x80 then return 1
+    else return 2 end
+end
+
+local function splitDisplayLine(text)
+    local lines = {}
+    local current = ""
+    local currentWidth = 0
+    local i = 1
+    text = tostring(text)
+    while i <= #text do
+        local byte = text:byte(i)
+        local charLength = utf8CharLength(byte)
+        local char = text:sub(i, i + charLength - 1)
+        local charWidth = utf8CharWidth(byte)
+        if currentWidth > 0 and currentWidth + charWidth > DISPLAY_WIDTH then
+            table.insert(lines, current)
+            current = ""
+            currentWidth = 0
+        end
+        current = current .. char
+        currentWidth = currentWidth + charWidth
+        i = i + charLength
+    end
+    table.insert(lines, current)
+    return lines
+end
+
+local function padDisplayLine(line)
+    local width = 0
+    local i = 1
+    while i <= #line do
+        local byte = line:byte(i)
+        width = width + utf8CharWidth(byte)
+        i = i + utf8CharLength(byte)
+    end
+    return line .. string.rep(" ", math.max(0, DISPLAY_WIDTH - width))
+end
+
+local function redrawDisplay()
+    if not gpu then return end
+    for i = 1, DISPLAY_HEIGHT do
+        gpu.set(1, i, padDisplayLine(displayLines[i] or ""))
+    end
+end
+
+local function pushDisplayLine(line)
+    line = tostring(line)
+    line = line:gsub("\r\n", "\n")
+    line = line:gsub("\r", "\n")
+    for textLine in (line .. "\n"):gmatch("(.-)\n") do
+        for _, wrappedLine in ipairs(splitDisplayLine(textLine)) do
+            table.insert(displayLines, wrappedLine)
+            while #displayLines > DISPLAY_HEIGHT do table.remove(displayLines, 1) end
+        end
+    end
+    redrawDisplay()
+end
+
+if gpu then
+    gpu.setViewport(DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    gpu.setForeground(0x00FF00)
+end
+
+local function print(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        table.insert(parts, tostring(select(i, ...)))
+    end
+    local line = table.concat(parts, "\t")
+    rawPrint(line)
+    pushDisplayLine(line)
+end
  
 --          配置区域（可修改）
 -- 格式: {流体注册名, 缓存阈值(mB), 行星, 气体}
 -- 缓存阈值支持单位后缀: k=千(10^3), m=百万(10^6), g=十亿(10^9), t=万亿(10^12)
 local FLUID_CONFIGS = {       
     {"liquidair", "1g", 8, 2},
-    {"molten.copper", "30g", 8, 3},
+    {"molten.copper", "4g", 8, 3},
     {"molten.iron", "4g", 4, 2},
     {"fluorine", "4g", 7, 2},
     {"hydrofluoricacid_gt5u", "4g", 7, 1},
