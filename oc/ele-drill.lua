@@ -3,108 +3,62 @@ local os = require("os")
 
 local rawPrint = print
 local gpu = component.isAvailable("gpu") and component.gpu or nil
-local DISPLAY_WIDTH = 48
-local DISPLAY_HEIGHT = 15
-local displayLines = {}
+local DISPLAY_WIDTH, DISPLAY_HEIGHT = 48, 15
+local displayLines, blankLine = {}, string.rep(" ", DISPLAY_WIDTH)
 
-local function utf8CharLength(byte)
-    if byte < 0x80 then return 1
-    elseif byte < 0xE0 then return 2
-    elseif byte < 0xF0 then return 3
-    else return 4 end
-end
-
-local function utf8CharWidth(byte)
-    if byte < 0x80 then return 1
-    else return 2 end
-end
-
-local function splitDisplayLine(text)
-    local lines = {}
-    local current = ""
-    local currentWidth = 0
-    local i = 1
-    text = tostring(text)
-    while i <= #text do
-        local byte = text:byte(i)
-        local charLength = utf8CharLength(byte)
-        local char = text:sub(i, i + charLength - 1)
-        local charWidth = utf8CharWidth(byte)
-        if currentWidth > 0 and currentWidth + charWidth > DISPLAY_WIDTH then
-            table.insert(lines, current)
-            current = ""
-            currentWidth = 0
-        end
-        current = current .. char
-        currentWidth = currentWidth + charWidth
-        i = i + charLength
-    end
-    table.insert(lines, current)
-    return lines
-end
-
-local function padDisplayLine(line)
-    local width = 0
-    local i = 1
-    while i <= #line do
-        local byte = line:byte(i)
-        width = width + utf8CharWidth(byte)
-        i = i + utf8CharLength(byte)
-    end
-    return line .. string.rep(" ", math.max(0, DISPLAY_WIDTH - width))
-end
-
-local function redrawDisplay()
-    if not gpu then return end
-    for i = 1, DISPLAY_HEIGHT do
-        gpu.set(1, i, padDisplayLine(displayLines[i] or ""))
-    end
+local function charInfo(s, i)
+    local b = s:byte(i)
+    if b < 0x80 then return 1, 1 end
+    if b < 0xE0 then return 2, 2 end
+    if b < 0xF0 then return 3, 2 end
+    return 4, 2
 end
 
 local function pushDisplayLine(line)
-    line = tostring(line)
-    line = line:gsub("\r\n", "\n")
-    line = line:gsub("\r", "\n")
-    for textLine in (line .. "\n"):gmatch("(.-)\n") do
-        for _, wrappedLine in ipairs(splitDisplayLine(textLine)) do
-            table.insert(displayLines, wrappedLine)
-            while #displayLines > DISPLAY_HEIGHT do table.remove(displayLines, 1) end
+    for textLine in (tostring(line):gsub("\r\n?", "\n") .. "\n"):gmatch("(.-)\n") do
+        local chunk, width, i = "", 0, 1
+        while i <= #textLine do
+            local len, charWidth = charInfo(textLine, i)
+            if width > 0 and width + charWidth > DISPLAY_WIDTH then
+                table.insert(displayLines, chunk)
+                chunk, width = "", 0
+            end
+            chunk = chunk .. textLine:sub(i, i + len - 1)
+            width = width + charWidth
+            i = i + len
         end
+        table.insert(displayLines, chunk)
+        while #displayLines > DISPLAY_HEIGHT do table.remove(displayLines, 1) end
     end
-    redrawDisplay()
+    if gpu then
+        for i = 1, DISPLAY_HEIGHT do gpu.set(1, i, (displayLines[i] or "") .. blankLine) end
+    end
 end
 
-if gpu then
-    gpu.setViewport(DISPLAY_WIDTH, DISPLAY_HEIGHT)
-    gpu.setForeground(0x00FF00)
-end
+if gpu then gpu.setViewport(DISPLAY_WIDTH, DISPLAY_HEIGHT) gpu.setForeground(0x00FF00) end
 
 local function print(...)
     local parts = {}
-    for i = 1, select("#", ...) do
-        table.insert(parts, tostring(select(i, ...)))
-    end
+    for i = 1, select("#", ...) do parts[i] = tostring(select(i, ...)) end
     local line = table.concat(parts, "\t")
     rawPrint(line)
     pushDisplayLine(line)
 end
  
---          配置区域（可修改）
--- 格式: {流体注册名, 缓存阈值(mB), 行星, 气体}
--- 缓存阈值支持单位后缀: k=千(10^3), m=百万(10^6), g=十亿(10^9), t=万亿(10^12)
+-- 配置: {流体注册名, 缓存阈值(mB), 行星, 气体}; 阈值支持 k/m/g/t 后缀
 local FLUID_CONFIGS = {       
     {"liquidair", "1g", 8, 2},
-    {"molten.copper", "4g", 8, 3},
-    {"molten.iron", "4g", 4, 2},
+    {"molten.copper", "40g", 8, 3},
+    {"molten.iron", "40g", 4, 2},
     {"fluorine", "4g", 7, 2},
     {"hydrofluoricacid_gt5u", "4g", 7, 1},
-    {"oxygen", "4g", 7, 4},
+    {"oxygen", "80g", 7, 4},
     {"ic2distilledwater", "6g", 8, 5},
     {"saltwater", "6g", 5, 3},
     {"sulfuricacid", "1g", 4, 1},
-    {"liquid_heavy_oil", "1g", 4, 4},
+    {"liquid_heavy_oil", "40g", 4, 4},
     {"oil", "1g", 4, 3},
-    {"helium", "1g", 5, 4},
+    {"helium", "60g", 5, 4},
     {"helium-3", "6g", 5, 2},
     {"deuterium", "6g", 6, 1},
     {"tritium", "6g", 6, 2},
@@ -112,105 +66,74 @@ local FLUID_CONFIGS = {
     {"ethylene", "2g", 6, 5},
     {"lava", "1g", 3, 3},
     {"methane", "1g", 5, 9},
-    -- {"molten.tin", "100m", 8, 7},
-    -- {"molten.lead", "100m", 4, 5},
     {"argon", "100m", 5, 7},
     {"radon", "2g", 8, 6},
-    {"krypton", "100m", 5, 8},
-    {"xenon", "2g", 6, 4},
+    {"krypton", "100g", 5, 8},
+    {"xenon", "20g", 6, 4},
+    {"molten.lead", "4g", 4, 5},
     {"chlorobenzene", "100m", 2, 1},
-    {"endergoo", "100m", 3, 1},
-    {"molten.copper", "30g", 8, 3},
-    {"molten.iron", "30g", 4, 2},
-    -- 在此处添加更多流体配置，按优先级从高到低排列
+    {"endergoo", "500m", 3, 1},
+    {"molten.copper", "240g", 8, 3},
+    {"molten.iron", "240g", 4, 2},
 }
  
--- 多台机器地址列表和等级（需要替换为实际的机器地址和等级）格式: {地址, 等级}
+-- 多台机器地址和等级: {地址, 等级}
 local MACHINES = {
     {"address", 2},
-    -- 在此处添加更多机器地址和等级
 }
  
--- 检测间隔(秒)
-local AUTO_DISCOVER_MACHINES = true
-local DEFAULT_MACHINE_LEVEL = 2
+local AUTO_DISCOVER_MACHINES, DEFAULT_MACHINE_LEVEL = true, 2
+local CHECK_INTERVAL, MAX_STOP_WAIT = 20, 60
 
-local CHECK_INTERVAL = 20
- 
-----函数部分
+local suffixMultipliers = {k = 1e3, m = 1e6, g = 1e9, t = 1e12}
 local function parseNumberWithSuffix(value)
     if type(value) == "number" then return value end
-    if type(value) ~= "string" then error("无效的数字格式: " .. tostring(value)) end
     if value == "-1" then return -1 end
     local numPart, suffix = value:match("^([%d%.]+)([kmgt]?)$")
-    if not numPart then error("无法解析数字: " .. value) end
     local number = tonumber(numPart)
-    if not number then error("无效的数字: " .. numPart) end
-    if suffix == "k" then return number * 1e3
-    elseif suffix == "m" then return number * 1e6
-    elseif suffix == "g" then return number * 1e9
-    elseif suffix == "t" then return number * 1e12
-    else return number end
+    if not number then error("无效的数字格式: " .. tostring(value)) end
+    return number * (suffixMultipliers[suffix] or 1)
 end
+
 local function formatNumberReadable(number)
     if number == -1 then return "-1 (持续获取)" end
-    local absNumber = math.abs(number)
-    if absNumber >= 1e12 then return string.format("%.1ft", number / 1e12)
-    elseif absNumber >= 1e9 then return string.format("%.1fg", number / 1e9)
-    elseif absNumber >= 1e6 then return string.format("%.1fm", number / 1e6)
-    elseif absNumber >= 1e3 then return string.format("%.1fk", number / 1e3)
-    else return tostring(number) end
+    for _, unit in ipairs({{"t", 1e12}, {"g", 1e9}, {"m", 1e6}, {"k", 1e3}}) do
+        if math.abs(number) >= unit[2] then return string.format("%.1f%s", number / unit[2], unit[1]) end
+    end
+    return tostring(number)
 end
 if not component.isAvailable("me_interface") then
     print("错误：未检测到ME接口，脚本终止") os.exit()
 end
-local PROCESSED_FLUID_CONFIGS = {}
-for _, config in ipairs(FLUID_CONFIGS) do
-    local threshold = config[2]
-    if type(threshold) == "string" and threshold ~= "-1" then threshold = parseNumberWithSuffix(threshold) end
-    table.insert(PROCESSED_FLUID_CONFIGS, {config[1], threshold, config[3], config[4]})
-end
-local gt_machines = {}
-local machineAddresses = {}
+for _, config in ipairs(FLUID_CONFIGS) do if type(config[2]) == "string" then config[2] = parseNumberWithSuffix(config[2]) end end
+local gt_machines, machineAddresses, machineLevels, discoveredMachines = {}, {}, {}, {}
 local machineCount = 0
-local machineLevels = {}
-local discoveredMachines = {}
 
-local function getMachineAddress(machine, fallbackAddress)
-    return machine.address or fallbackAddress
+local function addMachine(address, level, message)
+    local success, machine = pcall(component.proxy, address)
+    if not (success and machine and machine.type == "gt_machine") then return false end
+    local machineAddress = machine.address or address
+    if not discoveredMachines[machineAddress] then
+        table.insert(gt_machines, machine)
+        table.insert(machineAddresses, machineAddress)
+        discoveredMachines[machineAddress] = true
+        machineCount = machineCount + 1
+    end
+    machineLevels[machineAddress] = level
+    print(string.format(message, machineAddress, level))
+    return true
 end
 
 if AUTO_DISCOVER_MACHINES then
     for address in component.list("gt_machine", true) do
-        local success, machine = pcall(component.proxy, address)
-        if success and machine and machine.type == "gt_machine" then
-            local machineAddress = getMachineAddress(machine, address)
-            table.insert(gt_machines, machine)
-            table.insert(machineAddresses, machineAddress)
-            discoveredMachines[machineAddress] = true
-            machineLevels[machineAddress] = DEFAULT_MACHINE_LEVEL
-            machineCount = machineCount + 1
-            print("Found machine: " .. machineAddress .. " (level " .. DEFAULT_MACHINE_LEVEL .. ")")
-        end
+        addMachine(address, DEFAULT_MACHINE_LEVEL, "Found machine: %s (level %d)")
     end
 end
 
 for _, machineInfo in ipairs(MACHINES) do
     local address = machineInfo[1]
-    local level = machineInfo[2] or 1
-    if address ~= "address" then
-        local success, machine = pcall(component.proxy, address)
-        if success and machine and machine.type == "gt_machine" then
-            local machineAddress = getMachineAddress(machine, address)
-            if not discoveredMachines[machineAddress] then
-                table.insert(gt_machines, machine)
-                table.insert(machineAddresses, machineAddress)
-                discoveredMachines[machineAddress] = true
-                machineCount = machineCount + 1
-            end
-            machineLevels[machineAddress] = level
-            print("找到机器: " .. machineAddress .. " (等级 " .. level .. ")")
-        else print("警告: 无法访问机器 " .. address) end
+    if address ~= "address" and not addMachine(address, machineInfo[2] or 1, "找到机器: %s (等级 %d)") then
+        print("警告: 无法访问机器 " .. address)
     end
 end
 if machineCount == 0 then print("错误：未找到任何可用的太空钻机，脚本终止") os.exit() end
@@ -221,94 +144,71 @@ local function getFluidAmount(fluidName)
     return 0
 end
 local function anyFluidNeedsRefill(ignoreFluid)
-    for _, config in ipairs(PROCESSED_FLUID_CONFIGS) do
-        local fluidName = config[1]
-        local threshold = config[2]
-        if threshold ~= -1 and fluidName ~= ignoreFluid then
-            local amount = getFluidAmount(fluidName)
-            if amount < threshold then return true, fluidName, amount, threshold end
+    for _, config in ipairs(FLUID_CONFIGS) do
+        if config[2] ~= -1 and config[1] ~= ignoreFluid then
+            local amount = getFluidAmount(config[1])
+            if amount < config[2] then return true, config, amount, config[2] end
         end
     end
     return false, nil
 end
+
 local function safelyStopMachine(machine)
     machine.setWorkAllowed(false)
     if machine.isMachineActive() then
-        local maxWait = 60
         local waitCount = 0
-        while machine.isMachineActive() and waitCount < maxWait do os.sleep(1) waitCount = waitCount + 1 end
-        if waitCount >= maxWait then print("警告：机器停止超时") return false end
+        while machine.isMachineActive() and waitCount < MAX_STOP_WAIT do os.sleep(1) waitCount = waitCount + 1 end
+        if waitCount >= MAX_STOP_WAIT then print("警告：机器停止超时") return false end
     end
     return true
 end
 local function safelyStopAllMachines()
     local allStopped = true
     for i, machine in ipairs(gt_machines) do
-        if not safelyStopMachine(machine) then print("警告：机器 " .. i .. " 停止失败") allStopped = false end
+        local stopped = safelyStopMachine(machine)
+        if not stopped then print("警告：机器 " .. i .. " 停止失败") end
+        allStopped = stopped and allStopped
     end
     return allStopped
 end
-local function adjustMachineParametersLevel1(machine, param1, param2)
-    if safelyStopMachine(machine) then
-        local success1 = pcall(machine.setParameters, 0, 0, param1)
-        local success2 = pcall(machine.setParameters, 0, 1, param2)
-        if success1 and success2 then machine.setWorkAllowed(true) return true
-        else print("机器参数调整失败") return false end
-    else print("无法停止机器，参数调整取消") return false end
-end
-local function adjustMachineParametersLevel23(machine, param1, param2)
-    if safelyStopMachine(machine) then
-        local success = true
-        success = success and pcall(machine.setParameters, 0, 0, param1)
-        success = success and pcall(machine.setParameters, 0, 1, param2)
-        success = success and pcall(machine.setParameters, 2, 0, param1)
-        success = success and pcall(machine.setParameters, 2, 1, param2)
-        success = success and pcall(machine.setParameters, 4, 0, param1)
-        success = success and pcall(machine.setParameters, 4, 1, param2)
-        success = success and pcall(machine.setParameters, 6, 0, param1)
-        success = success and pcall(machine.setParameters, 6, 1, param2)
-        if success then machine.setWorkAllowed(true) return true
-        else print("机器参数调整失败") return false end
-    else print("无法停止机器，参数调整取消") return false end
+local function adjustMachineParameters(machine, level, param1, param2)
+    if not safelyStopMachine(machine) then print("无法停止机器，参数调整取消") return false end
+    local success = true
+    for _, hatch in ipairs(level == 1 and {0} or {0, 2, 4, 6}) do
+        success = success and pcall(machine.setParameters, hatch, 0, param1)
+        success = success and pcall(machine.setParameters, hatch, 1, param2)
+    end
+    if success then machine.setWorkAllowed(true) return true end
+    print("机器参数调整失败") return false
 end
 local function adjustAllMachinesParameters(param1, param2)
     local successCount = 0
     for i, machine in ipairs(gt_machines) do
         local address = machineAddresses[i] or tostring(machine.address)
         local level = machineLevels[address] or 1
-        local success
-        if level == 1 then success = adjustMachineParametersLevel1(machine, param1, param2)
-        else success = adjustMachineParametersLevel23(machine, param1, param2) end
+        local success = adjustMachineParameters(machine, level, param1, param2)
         if success then successCount = successCount + 1 print(string.format("机器 %d (等级 %d) 参数调整成功", i, level))
         else print(string.format("机器 %d (等级 %d) 参数调整失败", i, level)) end
     end
     return successCount
 end
 local function checkAllFluids()
-    local needsRefill, refillFluid, currentAmount, targetAmount = anyFluidNeedsRefill()
+    local needsRefill, refillConfig, currentAmount, targetAmount = anyFluidNeedsRefill()
     if needsRefill then
-        print(string.format("检测到需要补充的流体: %s, 当前 %s / 目标 %s", refillFluid, formatNumberReadable(currentAmount), formatNumberReadable(targetAmount)))
-        for _, config in ipairs(PROCESSED_FLUID_CONFIGS) do
-            local fluidName = config[1]
-            local threshold = config[2]
-            local param1 = config[3]
-            local param2 = config[4]
-            if fluidName == refillFluid then
-                local successCount = adjustAllMachinesParameters(param1, param2)
-                if successCount > 0 then print(string.format("已调整 %d 台机器参数以补充 %s", successCount, fluidName)) return true
-                else print("所有机器参数调整失败") end break
-            end
+        local fluidName = refillConfig[1]
+        print(string.format("检测到需要补充的流体: %s, 当前 %s / 目标 %s", fluidName, formatNumberReadable(currentAmount), formatNumberReadable(targetAmount)))
+        local successCount = adjustAllMachinesParameters(refillConfig[3], refillConfig[4])
+        if successCount > 0 then
+            print(string.format("已调整 %d 台机器参数以补充 %s", successCount, fluidName))
+            return true
         end
+        print("所有机器参数调整失败")
     else
-        for _, config in ipairs(PROCESSED_FLUID_CONFIGS) do
-            local fluidName = config[1]
-            local threshold = config[2]
-            local param1 = config[3]
-            local param2 = config[4]
-            if threshold == -1 then
-                print(string.format("所有常规流体充足，开始持续获取 %s", fluidName))
-                local successCount = adjustAllMachinesParameters(param1, param2)
-                if successCount > 0 then print(string.format("已调整 %d 台机器参数以持续获取 %s", successCount, fluidName)) return true
+        for _, config in ipairs(FLUID_CONFIGS) do
+            if config[2] == -1 then
+                print(string.format("所有常规流体充足，开始持续获取 %s", config[1]))
+                local successCount = adjustAllMachinesParameters(config[3], config[4])
+                if successCount > 0 then print(string.format("已调整 %d 台机器参数以持续获取 %s", successCount, config[1])) return true
                 else print("所有机器参数调整失败") end
             end
         end
@@ -319,16 +219,14 @@ local function checkAllFluids()
 end
 local function main()
     print("太空钻机流体监控系统启动")
-    print("监控间隔: " .. CHECK_INTERVAL .. "秒")
-    print("监控流体数量: " .. #PROCESSED_FLUID_CONFIGS)
-    print("管理机器数量: " .. #gt_machines)
+    print(string.format("间隔:%ds\n流体:%d\n机器:%d", CHECK_INTERVAL, #FLUID_CONFIGS, #gt_machines))
     for i, machine in ipairs(gt_machines) do
         local address = machineAddresses[i] or tostring(machine.address)
         local level = machineLevels[address] or 1
         print(string.format("机器 %d: 等级 %d", i, level))
     end
     print("\n当前流体监控配置:")
-    for _, config in ipairs(PROCESSED_FLUID_CONFIGS) do
+    for _, config in ipairs(FLUID_CONFIGS) do
         local readableThreshold = formatNumberReadable(config[2])
         print(string.format("  %s: %s (参数: %d, %d)", config[1], readableThreshold, config[3], config[4]))
     end
