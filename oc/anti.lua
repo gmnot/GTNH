@@ -35,12 +35,12 @@ function reset() --执行重新排序操作
     antired.setOutput(sidered, 15)  --对反物质仓输出一次红石信号，控制校准器清空反物质仓
     antired.setOutput(sidered, 0)
     sum = tr.getTankLevel(sideae) --读取此时量子缸里的流体数量，记为总和
-    md = sum % 16 --计算平分后的数量
+    md = sum % 16 --计算平分后的余数
     local count = md
     if sum > threshold then --记录大于阈值的数量
         count = sum - threshold
     end
-    print("[reset] level=" .. tostring(sum) .. ", transfer=" .. tostring(count))
+    print("[reset] tot=" .. tostring(sum) .. ", remove=" .. tostring(count))
     tr.transferFluid(sideae, sidetp, count) --将超出阈值的数量转移到产物ae
     aered.setOutput(sidered, 15)  --发出一次信号控制量子缸进行流体平分
     aered.setOutput(sidered, 0)
@@ -49,23 +49,23 @@ end
 local function main()
     -- os.execute("cls")
 
-    local fl = 1 --定义拉杆信号
-    local f666 = 0 --定义主机合成进度信号
+    local sig_on = 1 --定义拉杆信号
+    local sig_progress = 0 --定义主机合成进度信号
     
     mred.setOutput(sidered, 0) --关机 
     reset() --执行一次排序操作
     mred.setOutput(sidered, 15) --开机 
     
-    while fl > 0 do
+    while sig_on > 0 do
         os.sleep(0) --中断一下,同时避免长时间运行会导致too long without yielding
-        f666 = synred.getInput(synside) --获取主机合成进度信号
-        if f666 > 0 and f666 < 10 then --主机在合成中，重新平分变化后的流体
-            print("[loop] syn=" .. tostring(f666) .. ", reset")
+        sig_progress = synred.getInput(synside) --获取主机合成进度信号
+        if sig_progress > 0 and sig_progress < 10 then --主机在合成中，重新平分变化后的流体
+            print("[loop] syn=" .. tostring(sig_progress) .. ", reset")
             reset()
         end
-        fl = trig.getInput(trigside) --获取拉杆信号，检查是否要停机
+        sig_on = trig.getInput(trigside) --获取拉杆信号，检查是否要停机
     end
-    print("[stop] trig=" .. tostring(fl) .. ", machine off")
+    print("[stop] trig=" .. tostring(sig_on) .. ", machine off")
     mred.setOutput(sidered, 0) --循环结束，关闭机器
  
 end
