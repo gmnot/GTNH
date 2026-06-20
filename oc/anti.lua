@@ -49,24 +49,37 @@ end
 local function main()
     -- os.execute("cls")
 
-    local sig_on = 1 --定义拉杆信号
+    local sig_on = 0 --定义拉杆信号
     local sig_progress = 0 --定义主机合成进度信号
+    local prev_sig = 0
     
     mred.setOutput(sidered, 0) --关机 
     reset() --执行一次排序操作
-    mred.setOutput(sidered, 15) --开机 
     
-    while sig_on > 0 do
-        os.sleep(0) --中断一下,同时避免长时间运行会导致too long without yielding
-        sig_progress = synred.getInput(synside) --获取主机合成进度信号
-        if sig_progress > 0 and sig_progress < 10 then --主机在合成中，重新平分变化后的流体
-            print("[loop] syn=" .. tostring(sig_progress) .. ", reset")
-            reset()
-        end
+    while true do
+        prev_sig = sig_on
         sig_on = trig.getInput(trigside) --获取拉杆信号，检查是否要停机
+        if sig_on > 0 then
+            os.sleep(0) --中断一下,同时避免长时间运行会导致too long without yielding
+            if prev_sig == 0 then
+                mred.setOutput(sidered, 0) --关机 
+                reset() --执行一次排序操作
+                mred.setOutput(sidered, 15) --开机
+            end
+            sig_progress = synred.getInput(synside) --获取主机合成进度信号
+            if sig_progress > 0 and sig_progress < 10 then --主机在合成中，重新平分变化后的流体
+                print("[loop] progress=" .. tostring(sig_progress) .. ", reset")
+                reset()
+            end
+        else
+            if prev_sig > 0 then
+                print("[stop] trig=" .. tostring(sig_on) .. ", machine off")
+                mred.setOutput(sidered, 0) --循环结束，关闭机器
+            end
+            os.sleep(2)
+        end
     end
-    print("[stop] trig=" .. tostring(sig_on) .. ", machine off")
-    mred.setOutput(sidered, 0) --循环结束，关闭机器
+
  
 end
  
