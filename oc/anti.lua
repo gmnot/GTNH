@@ -60,6 +60,7 @@ local gtmTank = nil
 local meInterface = nil
 local nextInputOk = nil
 local nextInputCheckTime = 0
+local stopReason = "unknown"
 
 local sideNames = {
   [sides.down] = "down",
@@ -699,6 +700,9 @@ local function runOneBalance(firstCycleThisRun)
   end
 
   if not nextInputOk then
+    nextInputOk = nil
+    nextInputCheckTime = 0
+    stopReason = "input fluid low"
     return false
   end
 
@@ -712,6 +716,7 @@ local function runOneBalance(firstCycleThisRun)
 
   local syncStart = computer.uptime()
   if not waitResetWindow(label) then
+    stopReason = "control off during sync"
     return false
   end
   local syncTime = computer.uptime() - syncStart
@@ -731,6 +736,7 @@ local function runOneBalance(firstCycleThisRun)
   local sum, got = waitTankNonZero(timeout)
   if not got then
     printTankWaitFailure()
+    stopReason = "tank wait failed"
     return false
   end
 
@@ -754,6 +760,7 @@ local function runOneBalance(firstCycleThisRun)
 
   local emptied = waitTankEmpty()
   if not emptied then
+    stopReason = "control off while emptying tank"
     return false
   end
 
@@ -763,6 +770,7 @@ local function runOneBalance(firstCycleThisRun)
 
   local started = waitMachineStart()
   if not started then
+    stopReason = "control off before machine start"
     return false
   end
 
@@ -770,6 +778,7 @@ local function runOneBalance(firstCycleThisRun)
   nextInputOk = inputOk
   nextInputCheckTime = checkTime
   if not ended then
+    stopReason = "control off before machine end"
     return false
   end
 
@@ -816,6 +825,7 @@ local function runOneBalance(firstCycleThisRun)
   end
 
   lastKeep = keep
+  stopReason = "ok"
   return true
 end
 
@@ -843,7 +853,7 @@ local function main()
         end
       end
 
-      print("[stop] stopped or one signal off")
+      print("[stop] " .. stopReason)
       safeStop()
       os.sleep(1)
     else
