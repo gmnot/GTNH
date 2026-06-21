@@ -18,7 +18,7 @@ local rs = component.redstone
 local sideTank = nil
 local sideOutput = nil
 
-local threshold = 2000000
+local threshold = 2193392
 
 -- Forge progress >= this is treated as active cycle.
 local runningProgressMin = 2
@@ -32,13 +32,18 @@ local abnormalLoss = 1000
 -- Safety timeout for startup / wrong side / missing seed fluid.
 local tankWaitTimeout = 5
 
+-- Max wait before pulling tank during stop.
+local stopWaitTimeout = 3
+
 -- Yield every N tight-loop iterations.
 local yieldEvery = 80
 
 local cycle = 0
 local firstKeep = nil
 local lastKeep = nil
-local controlSide = nil
+
+-- Two redstone input sides are required.
+local controlSides = nil
 
 local gtmMachine = nil
 local gtmTank = nil
@@ -270,46 +275,77 @@ local function initSides()
   print("[init] output side=" .. sideName(sideOutput))
 end
 
+local function isTankMachineName(name)
+  local lname = string.lower(tostring(name))
+
+  return
+    string.find(lname, "quantum", 1, true) ~= nil or
+    string.find(lname, "tank", 1, true) ~= nil or
+    string.find(lname, "super", 1, true) ~= nil
+end
+
+local function printGtMachineList(list)
+  print("[detect] gt_machine components:")
+  for i, item in ipairs(list) do
+    print(
+      "  [" ..
+      tostring(i) ..
+      "] " ..
+      tostring(item.address) ..
+      " name=" ..
+      tostring(item.name)
+    )
+  end
+end
+
 local function initGtMachines()
   local list = {}
+  local nonForge = {}
+  local tankCandidates = {}
 
   for addr in component.list("gt_machine") do
     local name = tostring(invoke(addr, "getName"))
 
-    table.insert(list, {
+    local item = {
       address = addr,
       name = name,
-    })
-  end
+    }
 
-  if #list ~= 2 then
-    print("[fatal] expected exactly 2 gt_machine components, got " .. tostring(#list))
-    for i, item in ipairs(list) do
-      print("  [" .. tostring(i) .. "] " .. item.address .. " name=" .. item.name)
-    end
-    error("gt_machine count is not 2")
-  end
+    table.insert(list, item)
 
-  for _, item in ipairs(list) do
-    if item.name == "antimatterForge" then
+    if name == "antimatterForge" then
       if gtmMachine ~= nil then
         error("multiple antimatterForge components")
       end
-      gtmMachine = item.address
+      gtmMachine = addr
     else
-      if gtmTank ~= nil then
-        error("multiple non-forge gt_machine components")
+      table.insert(nonForge, item)
+
+      if isTankMachineName(name) then
+        table.insert(tankCandidates, item)
       end
-      gtmTank = item.address
     end
   end
 
+  if #list < 2 then
+    print("[fatal] expected at least 2 gt_machine components, got " .. tostring(#list))
+    printGtMachineList(list)
+    error("not enough gt_machine components")
+  end
+
   if gtmMachine == nil then
+    printGtMachineList(list)
     error("cannot find antimatterForge")
   end
 
-  if gtmTank == nil then
-    error("cannot find quantum tank gt_machine")
+  if #tankCandidates == 1 then
+    gtmTank = tankCandidates[1].address
+  elseif #tankCandidates == 0 and #nonForge == 1 then
+    gtmTank = nonForge[1].address
+  else
+    print("[fatal] cannot uniquely detect quantum tank gt_machine")
+    printGtMachineList(list)
+    error("cannot find unique tank gt_machine")
   end
 
   requireMethod(gtmMachine, "setWorkAllowed", "antimatterForge")
@@ -341,44 +377,108 @@ local function tankLevel()
   return getTankLevelSafe(sideTank)
 end
 
-local function findActiveControlSide()
-  local found = nil
-  local count = 0
+local function detectControlSides()
+  local active = {}
 
   for _, side in ipairs(allSides) do
     local value = rs.getInput(side)
     if value > 0 then
-      found = side
-      count = count + 1
+      table.insert(active, side)
     end
   end
 
-  if found == nil then
+  if #active < 2 then
     return false
   end
 
-  controlSide = found
-
-  print("[init] control side=" .. sideName(controlSide))
-
-  if count > 1 then
-    print("[warn] multiple redstone input sides on; using " .. sideName(controlSide))
+  if #active > 2 then
+    print("[fatal] expected exactly 2 redstone input sides, got " .. tostring(#active))
+    for _, side in ipairs(active) do
+      print("  active side=" .. sideName(side) .. ", value=" .. tostring(rs.getInput(side)))
+    end
+    error("too many redstone control inputs")
   end
+
+  controlSides = {
+    active[1],
+    active[2],
+  }
+
+  print(
+    "[init] control sides=" ..
+    sideName(controlSides[1]) ..
+    " + " ..
+    sideName(controlSides[2])
+  )
 
   return true
 end
 
 local function controlOn()
-  if controlSide == nil then
-    return findActiveControlSide()
+  if controlSides == nil then
+    return detectControlSides()
   end
 
-  return rs.getInput(controlSide) > 0
+  return (
+    rs.getInput(controlSides[1]) > 0 and
+    rs.getInput(controlSides[2]) > 0
+  )
 end
 
-local function stopAll()
+local function forceStopAll()
   pcall(setMachineAllowed, false)
   pcall(setTankAllowed, false)
+end
+
+local function waitCurrentCycleEnd(timeout)
+  local startTime = computer.uptime()
+
+  while progress() >= runningProgressMin do
+    if timeout ~= nil and computer.uptime() - startTime > timeout then
+      return false
+    end
+    os.sleep(0.05)
+  end
+
+  return true
+end
+
+local function safeStop()
+  pcall(setMachineAllowed, false)
+
+  local ok, ended = pcall(waitCurrentCycleEnd, stopWaitTimeout)
+  if ok and not ended then
+    print("[warn] timeout waiting current cycle before tank stop")
+  end
+
+  pcall(setTankAllowed, false)
+end
+
+local function waitResetWindow(label)
+  setMachineAllowed(false)
+
+  local p = progress()
+  if p >= runningProgressMin then
+    print(
+      "[sync] " ..
+      label ..
+      ": machine active, progress=" ..
+      tostring(p) ..
+      ", wait before reset"
+    )
+
+    while controlOn() and progress() >= runningProgressMin do
+      os.sleep(0.05)
+    end
+
+    if not controlOn() then
+      return false
+    end
+
+    print("[sync] machine cycle ended, safe to reset")
+  end
+
+  return true
 end
 
 local function keepRemove(sum)
@@ -466,7 +566,7 @@ end
 
 local function transferExcess(sum)
   local keep, remove = keepRemove(sum)
-  local transResult = "skip"
+  local transStatus = "succ"
 
   if remove > 0 then
     local ok, result = pcall(trans.transferFluid, sideTank, sideOutput, remove)
@@ -477,12 +577,12 @@ local function transferExcess(sum)
         " result=" ..
         tostring(result)
       )
+      transStatus = "fail"
       error("transferFluid failed")
     end
-    transResult = tostring(result)
   end
 
-  return keep, remove, transResult
+  return keep, remove, transStatus
 end
 
 local function printTankWaitFailure()
@@ -498,7 +598,16 @@ local function printTankWaitFailure()
   print("[bad] 4. calibrator/cover mode or redstone behavior is wrong")
 end
 
-local function runOneBalance()
+local function runOneBalance(firstCycleThisRun)
+  local label = "reset"
+  if firstCycleThisRun then
+    label = "first reset"
+  end
+
+  if not waitResetWindow(label) then
+    return false
+  end
+
   cycle = cycle + 1
 
   local t0 = computer.uptime()
@@ -507,7 +616,7 @@ local function runOneBalance()
   setTankAllowed(false)
 
   local timeout = nil
-  if cycle == 1 then
+  if firstCycleThisRun then
     timeout = tankWaitTimeout
   end
 
@@ -530,7 +639,7 @@ local function runOneBalance()
     )
   end
 
-  local keep, remove, transResult = transferExcess(sum)
+  local keep, remove, transStatus = transferExcess(sum)
 
   -- Enable tank: distribute antimatter from tank to hatches.
   setTankAllowed(true)
@@ -539,6 +648,8 @@ local function runOneBalance()
   if not emptied then
     return false
   end
+
+  local resetTime = computer.uptime() - t0
 
   setMachineAllowed(true)
 
@@ -556,13 +667,12 @@ local function runOneBalance()
     firstKeep = keep
   end
 
-  local dk = 0
+  local inc = 0
   if lastKeep ~= nil then
-    dk = keep - lastKeep
+    inc = keep - lastKeep
   end
 
-  local total = keep - firstKeep
-  local dt = computer.uptime() - t0
+  local totInc = keep - firstKeep
 
   if cycle % printEvery == 0 then
     print(
@@ -575,13 +685,14 @@ local function runOneBalance()
       " + " ..
       tostring(remove) ..
       ", trans=" ..
-      tostring(transResult) ..
-      ", dk=" ..
-      tostring(dk) ..
-      ", total=" ..
-      tostring(total) ..
-      ", dt=" ..
-      string.format("%.3f", dt)
+      transStatus ..
+      ", inc=" ..
+      tostring(inc) ..
+      ", tot_inc=" ..
+      tostring(totInc) ..
+      ", reset in " ..
+      string.format("%.2f", resetTime) ..
+      " sec"
     )
   end
 
@@ -594,28 +705,27 @@ local function main()
   initSides()
 
   print("[init] threshold=" .. tostring(threshold))
-  print("[init] waiting for control signal on any redstone side")
-
-  stopAll()
+  print("[init] waiting for 2 redstone input sides")
 
   while true do
     if controlOn() then
-      print("[start] signal on")
+      print("[start] both signals on")
 
-      setMachineAllowed(false)
-      setTankAllowed(false)
+      local firstCycleThisRun = true
 
       while controlOn() do
-        local ok = runOneBalance()
+        local ok = runOneBalance(firstCycleThisRun)
+        firstCycleThisRun = false
+
         if not ok then
           break
         end
       end
 
-      print("[stop] signal off")
-      stopAll()
+      print("[stop] stopped or one signal off")
+      safeStop()
     else
-      stopAll()
+      safeStop()
       os.sleep(1)
     end
   end
@@ -623,6 +733,6 @@ end
 
 local ok, err = pcall(main)
 if not ok then
-  stopAll()
+  forceStopAll()
   print("[fatal] " .. tostring(err))
 end
