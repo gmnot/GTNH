@@ -20,6 +20,16 @@ local sideOutput = nil
 
 local threshold = 2193392
 
+local inputFluids = {
+  "temporalfluid",
+  "spatialfluid",
+  "molten.shirabon",
+  "naquadah based liquid fuel mkvi (depleted)",
+  "protomatter",
+}
+
+local inputFluidMin = math.sqrt(threshold) * 20
+
 -- Forge progress >= this is treated as active cycle.
 local runningProgressMin = 2
 
@@ -47,6 +57,9 @@ local controlSides = nil
 
 local gtmMachine = nil
 local gtmTank = nil
+local meInterface = nil
+local nextInputOk = nil
+local nextInputCheckTime = 0
 
 local sideNames = {
   [sides.down] = "down",
@@ -98,6 +111,72 @@ local function requireMethod(addr, name, label)
   if not hasMethod(addr, name) then
     error(label .. " missing method: " .. name)
   end
+end
+
+local function initMeInterface()
+  if not component.isAvailable("me_interface") then
+    error("no me_interface component")
+  end
+
+  local candidates = {}
+
+  for addr in component.list("me_interface", true) do
+    local methods = component.methods(addr)
+    table.insert(candidates, { address = addr, methods = methods })
+
+    if methods ~= nil and methods.getFluidsInNetwork ~= nil then
+      meInterface = component.proxy(addr)
+      print("[init] me_interface=" .. tostring(addr))
+      print("[init] input fluid min=" .. string.format("%.2f", inputFluidMin))
+      return
+    end
+  end
+
+  print("[fatal] no me_interface with getFluidsInNetwork")
+  for i, item in ipairs(candidates) do
+    print("  [" .. tostring(i) .. "] " .. tostring(item.address))
+    if item.methods ~= nil then
+      for name in pairs(item.methods) do
+        print("    method=" .. tostring(name))
+      end
+    end
+  end
+
+  error("me_interface missing method: getFluidsInNetwork")
+end
+
+local function getNetworkFluidAmounts()
+  local fluids = meInterface.getFluidsInNetwork()
+  local amounts = {}
+
+  for _, fluid in ipairs(fluids) do
+    if fluid.name ~= nil then
+      amounts[fluid.name] = tonumber(fluid.amount) or 0
+    end
+  end
+
+  return amounts
+end
+
+local function checkInputFluids()
+  local amounts = getNetworkFluidAmounts()
+
+  for _, fluidName in ipairs(inputFluids) do
+    local amount = amounts[fluidName] or 0
+    if amount <= inputFluidMin then
+      print(
+        "[bad] input fluid low: " ..
+        fluidName ..
+        " amount=" ..
+        tostring(amount) ..
+        " need>" ..
+        string.format("%.2f", inputFluidMin)
+      )
+      return false
+    end
+  end
+
+  return true
 end
 
 local function getTankInfoSafe(side)
@@ -553,15 +632,27 @@ local function waitMachineStart()
   return false
 end
 
-local function waitMachineEnd()
+local function waitMachineEndAndCheckInputs()
+  local checked = false
+  local inputOk = true
+  local checkTime = 0
+
   while controlOn() do
-    if progress() < runningProgressMin then
-      return true
+    if not checked then
+      local checkStart = computer.uptime()
+      inputOk = checkInputFluids()
+      checkTime = computer.uptime() - checkStart
+      checked = true
     end
+
+    if progress() < runningProgressMin then
+      return true, inputOk, checkTime
+    end
+
     os.sleep(0.05)
   end
 
-  return false
+  return false, inputOk, checkTime
 end
 
 local function transferExcess(sum)
@@ -599,14 +690,31 @@ local function printTankWaitFailure()
 end
 
 local function runOneBalance(firstCycleThisRun)
+  local precheckTime = 0
+
+  if nextInputOk == nil then
+    local checkStart = computer.uptime()
+    nextInputOk = checkInputFluids()
+    precheckTime = computer.uptime() - checkStart
+  end
+
+  if not nextInputOk then
+    return false
+  end
+
+  nextInputOk = nil
+  nextInputCheckTime = 0
+
   local label = "reset"
   if firstCycleThisRun then
     label = "first reset"
   end
 
+  local syncStart = computer.uptime()
   if not waitResetWindow(label) then
     return false
   end
+  local syncTime = computer.uptime() - syncStart
 
   cycle = cycle + 1
 
@@ -658,7 +766,9 @@ local function runOneBalance(firstCycleThisRun)
     return false
   end
 
-  local ended = waitMachineEnd()
+  local ended, inputOk, checkTime = waitMachineEndAndCheckInputs()
+  nextInputOk = inputOk
+  nextInputCheckTime = checkTime
   if not ended then
     return false
   end
@@ -673,6 +783,7 @@ local function runOneBalance(firstCycleThisRun)
   end
 
   local totInc = keep - firstKeep
+  local totalTime = precheckTime + syncTime + resetTime
 
   if cycle % printEvery == 0 then
     print(
@@ -690,8 +801,16 @@ local function runOneBalance(firstCycleThisRun)
       tostring(inc) ..
       ", tot_inc=" ..
       tostring(totInc) ..
-      ", reset in " ..
+      ", check=" ..
+      string.format("%.2f", nextInputCheckTime) ..
+      ", precheck=" ..
+      string.format("%.2f", precheckTime) ..
+      ", sync=" ..
+      string.format("%.2f", syncTime) ..
+      ", reset=" ..
       string.format("%.2f", resetTime) ..
+      ", total=" ..
+      string.format("%.2f", totalTime) ..
       " sec"
     )
   end
@@ -701,10 +820,12 @@ local function runOneBalance(firstCycleThisRun)
 end
 
 local function main()
+  initMeInterface()
   initGtMachines()
   initSides()
 
   print("[init] threshold=" .. tostring(threshold))
+  print("[init] input fluids=" .. tostring(#inputFluids))
   print("[init] waiting for 2 redstone input sides")
 
   while true do
@@ -724,6 +845,7 @@ local function main()
 
       print("[stop] stopped or one signal off")
       safeStop()
+      os.sleep(1)
     else
       safeStop()
       os.sleep(1)
