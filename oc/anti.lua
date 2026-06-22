@@ -28,7 +28,8 @@ local inputFluids = {
   "protomatter",
 }
 
-local inputFluidMin = math.sqrt(threshold) * 20
+local inputFluidStopMin = math.sqrt(threshold) * 10
+local inputFluidStartMin = math.sqrt(threshold) * 300
 
 -- Forge progress >= this is treated as active cycle.
 local runningProgressMin = 2
@@ -44,6 +45,9 @@ local tankWaitTimeout = 5
 
 -- Max wait before pulling tank during stop.
 local stopWaitTimeout = 3
+
+-- Wait before retrying after input fluid shortage.
+local inputLowRetryDelay = 120
 
 -- Yield every N tight-loop iterations.
 local yieldEvery = 80
@@ -128,7 +132,8 @@ local function initMeInterface()
     if methods ~= nil and methods.getFluidsInNetwork ~= nil then
       meInterface = component.proxy(addr)
       print("[init] me_interface=" .. tostring(addr))
-      print("[init] input fluid min=" .. string.format("%.2f", inputFluidMin))
+      print("[init] input fluid stop min=" .. string.format("%.2f", inputFluidStopMin))
+      print("[init] input fluid start min=" .. string.format("%.2f", inputFluidStartMin))
       return
     end
   end
@@ -159,19 +164,21 @@ local function getNetworkFluidAmounts()
   return amounts
 end
 
-local function checkInputFluids()
+local function checkInputFluids(minAmount, reason)
   local amounts = getNetworkFluidAmounts()
 
   for _, fluidName in ipairs(inputFluids) do
     local amount = amounts[fluidName] or 0
-    if amount <= inputFluidMin then
+    if amount <= minAmount then
       print(
-        "[bad] input fluid low: " ..
+        "[bad] input fluid low " ..
+        tostring(reason) ..
+        ": " ..
         fluidName ..
         " amount=" ..
         tostring(amount) ..
         " need>" ..
-        string.format("%.2f", inputFluidMin)
+        string.format("%.2f", minAmount)
       )
       return false
     end
@@ -641,7 +648,7 @@ local function waitMachineEndAndCheckInputs()
   while controlOn() do
     if not checked then
       local checkStart = computer.uptime()
-      inputOk = checkInputFluids()
+      inputOk = checkInputFluids(inputFluidStopMin, "stop")
       checkTime = computer.uptime() - checkStart
       checked = true
     end
@@ -695,7 +702,7 @@ local function runOneBalance(firstCycleThisRun)
 
   if nextInputOk == nil then
     local checkStart = computer.uptime()
-    nextInputOk = checkInputFluids()
+    nextInputOk = checkInputFluids(inputFluidStartMin, "start")
     precheckTime = computer.uptime() - checkStart
   end
 
@@ -855,7 +862,12 @@ local function main()
 
       print("[stop] " .. stopReason)
       safeStop()
-      os.sleep(1)
+      if stopReason == "input fluid low" then
+        print("[wait] input fluid low, retry in " .. tostring(inputLowRetryDelay) .. " sec")
+        os.sleep(inputLowRetryDelay)
+      else
+        os.sleep(1)
+      end
     else
       safeStop()
       os.sleep(1)
