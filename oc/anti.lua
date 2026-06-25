@@ -47,7 +47,7 @@ local tankWaitTimeout = 5
 local stopWaitTimeout = 3
 
 -- Wait before retrying after input fluid shortage.
-local inputLowRetryDelay = 120
+local inputLowRetryDelay = 300
 
 -- Yield every N tight-loop iterations.
 local yieldEvery = 80
@@ -86,6 +86,18 @@ local allSides = {
 
 local function sideName(side)
   return (sideNames[side] or "unknown") .. "(" .. tostring(side) .. ")"
+end
+
+local function lpad(value, width)
+  local text = tostring(value)
+  if string.len(text) >= width then
+    return text
+  end
+  return string.rep(" ", width - string.len(text)) .. text
+end
+
+local function formatSeconds(value)
+  return string.format("%.2f", value)
 end
 
 local function tryInvoke(addr, name, ...)
@@ -665,7 +677,6 @@ end
 
 local function transferExcess(sum)
   local keep, remove = keepRemove(sum)
-  local transStatus = "succ"
 
   if remove > 0 then
     local ok, result = pcall(trans.transferFluid, sideTank, sideOutput, remove)
@@ -676,12 +687,11 @@ local function transferExcess(sum)
         " result=" ..
         tostring(result)
       )
-      transStatus = "fail"
       error("transferFluid failed")
     end
   end
 
-  return keep, remove, transStatus
+  return keep, remove
 end
 
 local function printTankWaitFailure()
@@ -760,7 +770,7 @@ local function runOneBalance(firstCycleThisRun)
     )
   end
 
-  local keep, remove, transStatus = transferExcess(sum)
+  local keep, remove = transferExcess(sum)
 
   -- Enable tank: distribute antimatter from tank to hatches.
   setTankAllowed(true)
@@ -799,35 +809,35 @@ local function runOneBalance(firstCycleThisRun)
   end
 
   local totInc = keep - firstKeep
-  local totalTime = precheckTime + syncTime + resetTime
+  local totalTime = nextInputCheckTime + precheckTime + syncTime + resetTime
+  local amountWidth = math.max(8, string.len(tostring(threshold)) + 2)
+  local deltaWidth = math.max(6, amountWidth - 2)
 
   if cycle % printEvery == 0 then
     print(
       "[cyc] #" ..
-      tostring(cycle) ..
+      lpad(cycle, 4) ..
       " " ..
-      tostring(sum) ..
+      lpad(sum, amountWidth) ..
+      " - " ..
+      lpad(remove, amountWidth) ..
       " = " ..
-      tostring(keep) ..
-      " + " ..
-      tostring(remove) ..
-      ", trans=" ..
-      transStatus ..
+      lpad(keep, amountWidth) ..
       ", inc=" ..
-      tostring(inc) ..
+      lpad(inc, deltaWidth) ..
       ", tot_inc=" ..
-      tostring(totInc) ..
-      ", check=" ..
-      string.format("%.2f", nextInputCheckTime) ..
-      ", precheck=" ..
-      string.format("%.2f", precheckTime) ..
-      ", sync=" ..
-      string.format("%.2f", syncTime) ..
-      ", reset=" ..
-      string.format("%.2f", resetTime) ..
-      ", total=" ..
-      string.format("%.2f", totalTime) ..
-      " sec"
+      lpad(totInc, deltaWidth) ..
+      ", T=" ..
+      formatSeconds(totalTime) ..
+      " s (" ..
+      formatSeconds(nextInputCheckTime) ..
+      "+" ..
+      formatSeconds(precheckTime) ..
+      "+" ..
+      formatSeconds(syncTime) ..
+      "+" ..
+      formatSeconds(resetTime) ..
+      ")"
     )
   end
 

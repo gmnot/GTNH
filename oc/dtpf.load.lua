@@ -1,6 +1,17 @@
+local component = require("component");
+local computer = require("computer");
+
+local function requireComponent(componentType)
+  local address = component.list(componentType)();
+  if address == nil then
+    error("no " .. componentType .. " component");
+  end
+  return component.proxy(address);
+end
+
 local WAIT_SEC = 1;
-local rs = component.proxy(component.list("redstone")());
-local chunkloader = component.proxy(component.list("chunkloader")());
+local rs = requireComponent("redstone");
+local chunkloader = requireComponent("chunkloader");
 local waitsec = 0;
 local shouldAnchorEnable = false;
 
