@@ -38,7 +38,7 @@ local runningProgressMin = 2
 local printEvery = 1
 
 -- Warn if returned amount is much lower than previous kept amount.
-local abnormalLoss = 1000
+local abnormalLoss = threshold / 300
 
 -- Safety timeout for startup / wrong side / missing seed fluid.
 local tankWaitTimeout = 5

@@ -31,7 +31,107 @@ local function safeCall(fn, ...)
   return nil
 end
 
-print("Scanning fluids around transposer...")
+local function isEmptyStack(stack)
+  if stack == nil then
+    return true
+  end
+  if type(stack) ~= "table" then
+    return false
+  end
+  return stack.name == nil and stack.label == nil and stack.size == nil and stack.amount == nil
+end
+
+local function stackAmount(stack)
+  return stack.size or stack.amount or stack.qty or stack.count or 0
+end
+
+local function stackName(stack)
+  return stack.label or stack.name or stack.id or "unknown"
+end
+
+local function stackDetails(stack)
+  if type(stack) ~= "table" then
+    return tostring(stack)
+  end
+
+  local parts = {
+    tostring(stackName(stack)),
+    "x" .. tostring(stackAmount(stack)),
+  }
+
+  if stack.name ~= nil and stack.label ~= nil and stack.name ~= stack.label then
+    table.insert(parts, "name=" .. tostring(stack.name))
+  end
+  if stack.damage ~= nil then
+    table.insert(parts, "damage=" .. tostring(stack.damage))
+  end
+  if tonumber(stack.maxDamage) ~= nil and tonumber(stack.maxDamage) > 0 then
+    table.insert(parts, "maxDamage=" .. tostring(stack.maxDamage))
+  end
+
+  return table.concat(parts, ", ")
+end
+
+local function printInventorySide(side)
+  local size = safeCall(transposer.getInventorySize, side)
+  print("  inventory slots=" .. tostring(size or 0))
+
+  if size == nil or size <= 0 then
+    return
+  end
+
+  local any = false
+  for slot = 1, size do
+    local stack = safeCall(transposer.getStackInSlot, side, slot)
+    if not isEmptyStack(stack) then
+      any = true
+      print(string.format("    slot %d: %s", slot, stackDetails(stack)))
+    end
+  end
+
+  if not any then
+    print("    empty")
+  end
+end
+
+local function hasMethod(addr, name)
+  local methods = safeCall(component.methods, addr)
+  return methods ~= nil and methods[name] ~= nil
+end
+
+local function printInterfaceMarkedItems()
+  local found = false
+
+  for addr in component.list("me_interface", true) do
+    found = true
+    print("")
+    print("ME interface: " .. tostring(addr))
+
+    if not hasMethod(addr, "getInterfaceConfiguration") then
+      print("  no getInterfaceConfiguration method")
+    else
+      local any = false
+      for slot = 1, 81 do
+        local stack = safeCall(component.invoke, addr, "getInterfaceConfiguration", slot)
+        if not isEmptyStack(stack) then
+          any = true
+          print(string.format("  config %d: %s", slot, stackDetails(stack)))
+        end
+      end
+
+      if not any then
+        print("  no marked items")
+      end
+    end
+  end
+
+  if not found then
+    print("")
+    print("ME interface: none")
+  end
+end
+
+print("Scanning fluids and items around transposer...")
 print("Transposer: " .. tostring(transposer.address))
 
 for _, side in ipairs(sideList) do
@@ -55,7 +155,11 @@ for _, side in ipairs(sideList) do
       end
     end
   end
+
+  printInventorySide(side)
 end
+
+printInterfaceMarkedItems()
 
 print("")
 print("Scan complete.")
