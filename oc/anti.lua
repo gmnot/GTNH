@@ -18,7 +18,7 @@ local rs = component.redstone
 local sideTank = nil
 local sideOutput = nil
 
-local threshold = 2193392
+local threshold = 1876592  -- best for Sh
 
 local inputFluids = {
   "temporalfluid",
