@@ -350,7 +350,9 @@ local function main()
 
   while true do
     drawLines(buildScreen())
-    collectgarbage()
+    if type(collectgarbage) == "function" then
+      collectgarbage()
+    end
     os.sleep(CHECK_INTERVAL)
   end
 end
