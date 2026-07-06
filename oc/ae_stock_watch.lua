@@ -28,12 +28,14 @@ local FLUID_CONFIGS = {
 }
 
 local CHECK_INTERVAL = 10
-local DISPLAY_WIDTH = 80
-local DISPLAY_HEIGHT = 25
+local DISPLAY_WIDTH = 64
+local DISPLAY_HEIGHT = 18
+local USE_FAST_FLUID_QUERY = true
 
 local gpu = component.isAvailable("gpu") and component.gpu or nil
 local meInterface = nil
 local meAddress = nil
+local fastFluidQueryDisabled = false
 
 local COLOR_OK = 0x00FF00
 local COLOR_WARN = 0xFFFF00
@@ -115,6 +117,15 @@ local function padRight(text, width)
   return text .. string.rep(" ", padding)
 end
 
+local function padLeft(text, width)
+  text = tostring(text)
+  local padding = width - textWidth(text)
+  if padding <= 0 then
+    return fitText(text, width)
+  end
+  return string.rep(" ", padding) .. text
+end
+
 local function safeCall(fn, ...)
   local ok, result = pcall(fn, ...)
   if ok then
@@ -130,6 +141,7 @@ end
 
 local function initDisplay()
   if gpu ~= nil then
+    pcall(gpu.setResolution, DISPLAY_WIDTH, DISPLAY_HEIGHT)
     pcall(gpu.setViewport, DISPLAY_WIDTH, DISPLAY_HEIGHT)
     pcall(gpu.setForeground, COLOR_OK)
   end
@@ -283,9 +295,49 @@ local function getNetworkFluidAmounts()
   return amounts
 end
 
-local function getFluidAmount(config, amounts)
+local function getFluidAmountFromMap(config, amounts)
   local key = tostring(config.name or config.label or "")
   return amounts[key] or amounts[key:lower()] or 0
+end
+
+local function getFastFluidAmount(config)
+  local query = {}
+  if config.name ~= nil and config.name ~= "" then
+    query.name = config.name
+  end
+
+  local fluids = safeCall(meInterface.getFluidsInNetwork, query) or {}
+  if #fluids > 20 then
+    fastFluidQueryDisabled = true
+    return nil
+  end
+
+  local total = 0
+  local wanted = tostring(config.name or config.label or ""):lower()
+
+  for _, fluid in ipairs(fluids) do
+    if type(fluid) == "table" then
+      local name = tostring(fluid.name or ""):lower()
+      local label = tostring(fluid.label or ""):lower()
+      if name == wanted or label == wanted then
+        total = total + (tonumber(fluid.amount) or 0)
+      end
+    end
+  end
+
+  return total
+end
+
+local function getFluidAmount(config, amounts)
+  if USE_FAST_FLUID_QUERY and not fastFluidQueryDisabled then
+    local amount = getFastFluidAmount(config)
+    if amount ~= nil then
+      return amount
+    end
+    return nil
+  end
+
+  return getFluidAmountFromMap(config, amounts)
 end
 
 local function addStatusLine(lines, name, current, config)
@@ -299,19 +351,26 @@ local function addStatusLine(lines, name, current, config)
     color = COLOR_WARN
   end
 
+  local text =
+    padRight(name, 14) ..
+    " " ..
+    padLeft(formatNumber(current), 9) ..
+    " / " ..
+    padRight(formatNumber(config.warn), 8) ..
+    " " ..
+    padRight(status, 12)
+
   table.insert(lines, {
     color = color,
-    text = string.format(
-    "%-24s %10s / %-10s %s",
-    fitText(name, 24),
-    formatNumber(current),
-    formatNumber(config.warn),
-    status
-  ) })
+    text = text,
+  })
 end
 
 local function buildScreen()
-  local fluidAmounts = getNetworkFluidAmounts()
+  local fluidAmounts = nil
+  if not USE_FAST_FLUID_QUERY or fastFluidQueryDisabled then
+    fluidAmounts = getNetworkFluidAmounts()
+  end
   local lines = {}
   local missing = 0
 
@@ -338,6 +397,10 @@ local function buildScreen()
 
     for _, config in ipairs(FLUID_CONFIGS) do
       local current = getFluidAmount(config, fluidAmounts)
+      if current == nil then
+        fluidAmounts = getNetworkFluidAmounts()
+        current = getFluidAmountFromMap(config, fluidAmounts)
+      end
       if current < config.warn then
         missing = missing + 1
       end
