@@ -36,6 +36,20 @@ local gpu = component.isAvailable("gpu") and component.gpu or nil
 local meInterface = nil
 local meAddress = nil
 local fastFluidQueryDisabled = false
+local perf = {
+  item = 0,
+  fluid = 0,
+  build = 0,
+  draw = 0,
+  total = 0,
+  loops = 0,
+  itemAvg = 0,
+  fluidAvg = 0,
+  buildAvg = 0,
+  drawAvg = 0,
+  totalAvg = 0,
+  fluidMode = "fast",
+}
 
 local COLOR_OK = 0x00FF00
 local COLOR_WARN = 0xFFFF00
@@ -66,6 +80,20 @@ local function formatNumber(value)
     end
   end
   return tostring(math.floor(number))
+end
+
+local function formatMs(seconds)
+  return string.format("%.0fms", (tonumber(seconds) or 0) * 1000)
+end
+
+local function updateAverage(field, value)
+  local avgField = field .. "Avg"
+  local count = perf.loops
+  if count <= 1 then
+    perf[avgField] = value
+  else
+    perf[avgField] = perf[avgField] + (value - perf[avgField]) / count
+  end
 end
 
 local function charInfo(text, index)
@@ -267,6 +295,7 @@ local function getItemAmount(config)
 end
 
 local function getNetworkFluidAmounts()
+  perf.fluidMode = "full"
   local fluids = safeCall(meInterface.getFluidsInNetwork) or {}
   local amounts = {}
 
@@ -301,6 +330,7 @@ local function getFluidAmountFromMap(config, amounts)
 end
 
 local function getFastFluidAmount(config)
+  perf.fluidMode = "fast"
   local query = {}
   if config.name ~= nil and config.name ~= "" then
     query.name = config.name
@@ -309,6 +339,7 @@ local function getFastFluidAmount(config)
   local fluids = safeCall(meInterface.getFluidsInNetwork, query) or {}
   if #fluids > 20 then
     fastFluidQueryDisabled = true
+    perf.fluidMode = "fallback"
     return nil
   end
 
@@ -367,9 +398,14 @@ local function addStatusLine(lines, name, current, config)
 end
 
 local function buildScreen()
+  local buildStart = computer.uptime()
+  perf.item = 0
+  perf.fluid = 0
   local fluidAmounts = nil
   if not USE_FAST_FLUID_QUERY or fastFluidQueryDisabled then
+    local fluidStart = computer.uptime()
     fluidAmounts = getNetworkFluidAmounts()
+    perf.fluid = perf.fluid + (computer.uptime() - fluidStart)
   end
   local lines = {}
   local missing = 0
@@ -388,7 +424,9 @@ local function buildScreen()
     table.insert(lines, "No configs yet. Fill ITEM_CONFIGS and FLUID_CONFIGS at top of file.")
   else
     for _, config in ipairs(ITEM_CONFIGS) do
+      local itemStart = computer.uptime()
       local current = getItemAmount(config)
+      perf.item = perf.item + (computer.uptime() - itemStart)
       if current < config.warn then
         missing = missing + 1
       end
@@ -396,10 +434,14 @@ local function buildScreen()
     end
 
     for _, config in ipairs(FLUID_CONFIGS) do
+      local fluidStart = computer.uptime()
       local current = getFluidAmount(config, fluidAmounts)
+      perf.fluid = perf.fluid + (computer.uptime() - fluidStart)
       if current == nil then
+        fluidStart = computer.uptime()
         fluidAmounts = getNetworkFluidAmounts()
         current = getFluidAmountFromMap(config, fluidAmounts)
+        perf.fluid = perf.fluid + (computer.uptime() - fluidStart)
       end
       if current < config.warn then
         missing = missing + 1
@@ -416,6 +458,24 @@ local function buildScreen()
   end
 
   table.insert(lines, "")
+  perf.build = computer.uptime() - buildStart
+  table.insert(lines, string.format(
+    "N i%s f%s b%s d%s t%s %s",
+    formatMs(perf.item),
+    formatMs(perf.fluid),
+    formatMs(perf.build),
+    formatMs(perf.draw),
+    formatMs(perf.total),
+    perf.fluidMode
+  ))
+  table.insert(lines, string.format(
+    "A i%s f%s b%s d%s t%s",
+    formatMs(perf.itemAvg),
+    formatMs(perf.fluidAvg),
+    formatMs(perf.buildAvg),
+    formatMs(perf.drawAvg),
+    formatMs(perf.totalAvg)
+  ))
   table.insert(lines, "Refresh: " .. tostring(CHECK_INTERVAL) .. "s")
   return lines
 end
@@ -426,7 +486,18 @@ local function main()
   initMeInterface()
 
   while true do
-    drawLines(buildScreen())
+    local loopStart = computer.uptime()
+    local lines = buildScreen()
+    local drawStart = computer.uptime()
+    drawLines(lines)
+    perf.draw = computer.uptime() - drawStart
+    perf.total = computer.uptime() - loopStart
+    perf.loops = perf.loops + 1
+    updateAverage("item", perf.item)
+    updateAverage("fluid", perf.fluid)
+    updateAverage("build", perf.build)
+    updateAverage("draw", perf.draw)
+    updateAverage("total", perf.total)
     os.sleep(CHECK_INTERVAL)
   end
 end
