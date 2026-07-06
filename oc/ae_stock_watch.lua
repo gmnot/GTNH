@@ -18,10 +18,19 @@ local ITEM_CONFIGS = {
 --   label: optional display name
 --   min: required amount in mB, supports k/m/g/t suffix
 local FLUID_CONFIGS = {
-  { name = "magmadah based liquid fuel mkvi", min = "10k" },
+  {
+    name = "naquadah based liquid fuel mkvi",
+    aliases = {
+      "magmadah based liquid fuel mkvi",
+      "magmadah_based_liquid_fuel_mkvi",
+      "naquadah_based_liquid_fuel_mkvi",
+    },
+    min = "10k",
+  },
   { name = "molten.infinity", min = "500m" },
   { name = "temporalfluid", aliases = { "temporalFluid" }, min = "1m" },
-  { name = "excitedtec", min = "500m" },
+  { name = "exciteddtrc", min = "500m" },
+  { name = "exciteddtsc", min = "500m" },
 }
 
 local CHECK_INTERVAL = 10
@@ -269,13 +278,23 @@ local function getNetworkFluidAmounts()
   local amounts = {}
 
   for _, fluid in ipairs(fluids) do
-    if type(fluid) == "table" and fluid.name ~= nil then
+    if type(fluid) == "table" and (fluid.name ~= nil or fluid.label ~= nil) then
       local amount = tonumber(fluid.amount) or 0
-      local key = tostring(fluid.name)
-      local lowerKey = key:lower()
-      amounts[key] = (amounts[key] or 0) + amount
-      if lowerKey ~= key then
-        amounts[lowerKey] = (amounts[lowerKey] or 0) + amount
+      local added = {}
+
+      for _, rawKey in ipairs({ fluid.name, fluid.label }) do
+        if rawKey ~= nil then
+          local key = tostring(rawKey)
+          local lowerKey = key:lower()
+          if not added[key] then
+            added[key] = true
+            amounts[key] = (amounts[key] or 0) + amount
+          end
+          if lowerKey ~= key and not added[lowerKey] then
+            added[lowerKey] = true
+            amounts[lowerKey] = (amounts[lowerKey] or 0) + amount
+          end
+        end
       end
     end
   end
@@ -302,13 +321,18 @@ local function getFluidAmount(config, amounts)
 end
 
 local function addStatusLine(lines, kind, name, current, target)
+  local status = "ok"
+  if current < target then
+    status = "lack " .. formatNumber(target - current)
+  end
+
   table.insert(lines, string.format(
-    "%-5s %-34s %10s / %-10s lack %s",
+    "%-5s %-34s %10s / %-10s %s",
     kind,
     fitText(name, 34),
     formatNumber(current),
     formatNumber(target),
-    formatNumber(target - current)
+    status
   ))
 end
 
@@ -334,16 +358,16 @@ local function buildScreen()
       local current = getItemAmount(config)
       if current < config.min then
         missing = missing + 1
-        addStatusLine(lines, "ITEM", displayName(config), current, config.min)
       end
+      addStatusLine(lines, "ITEM", displayName(config), current, config.min)
     end
 
     for _, config in ipairs(FLUID_CONFIGS) do
       local current = getFluidAmount(config, fluidAmounts)
       if current < config.min then
         missing = missing + 1
-        addStatusLine(lines, "FLUID", displayName(config), current, config.min)
       end
+      addStatusLine(lines, "FLUID", displayName(config), current, config.min)
     end
 
     if missing == 0 then
