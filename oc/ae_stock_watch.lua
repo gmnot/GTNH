@@ -24,7 +24,7 @@ local FLUID_CONFIGS = {
   { name = "excitedtec", min = "500m" },
 }
 
-local CHECK_INTERVAL = 5
+local CHECK_INTERVAL = 10
 local DISPLAY_WIDTH = 80
 local DISPLAY_HEIGHT = 25
 
@@ -264,22 +264,37 @@ local function addFluidQueryNames(names, config)
   end
 end
 
-local function getFluidAmount(config)
+local function getNetworkFluidAmounts()
+  local fluids = safeCall(meInterface.getFluidsInNetwork) or {}
+  local amounts = {}
+
+  for _, fluid in ipairs(fluids) do
+    if type(fluid) == "table" and fluid.name ~= nil then
+      local amount = tonumber(fluid.amount) or 0
+      local key = tostring(fluid.name)
+      local lowerKey = key:lower()
+      amounts[key] = (amounts[key] or 0) + amount
+      if lowerKey ~= key then
+        amounts[lowerKey] = (amounts[lowerKey] or 0) + amount
+      end
+    end
+  end
+
+  return amounts
+end
+
+local function getFluidAmount(config, amounts)
   local total = 0
   local names = {}
   local seen = {}
   addFluidQueryNames(names, config)
 
   for _, name in ipairs(names) do
-    local fluids = safeCall(meInterface.getFluidsInNetwork, { name = name }) or {}
-    for _, fluid in ipairs(fluids or {}) do
-      if type(fluid) == "table" and fluidMatches(fluid, config) then
-        local key = tostring(fluid.name or name):lower()
-        if not seen[key] then
-          seen[key] = true
-          total = total + (tonumber(fluid.amount) or 0)
-        end
-      end
+    local key = tostring(name)
+    local lowerKey = key:lower()
+    if not seen[lowerKey] then
+      seen[lowerKey] = true
+      total = total + (amounts[key] or amounts[lowerKey] or 0)
     end
   end
 
@@ -298,6 +313,7 @@ local function addStatusLine(lines, kind, name, current, target)
 end
 
 local function buildScreen()
+  local fluidAmounts = getNetworkFluidAmounts()
   local lines = {}
   local missing = 0
 
@@ -323,7 +339,7 @@ local function buildScreen()
     end
 
     for _, config in ipairs(FLUID_CONFIGS) do
-      local current = getFluidAmount(config)
+      local current = getFluidAmount(config, fluidAmounts)
       if current < config.min then
         missing = missing + 1
         addStatusLine(lines, "FLUID", displayName(config), current, config.min)
