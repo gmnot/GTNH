@@ -8,29 +8,23 @@ local term = require("term")
 --   name: registry name, optional if label is set
 --   label: display name, optional if name is set
 --   damage: optional metadata/damage filter
---   min: required amount, supports k/m/g/t suffix
+--   short: display name
+--   fatal/warn: thresholds, supports k/m/g/t suffix
 local ITEM_CONFIGS = {
-  { name = "gtnhintergalactic:item.DysonSwarmParts", damage = 0, min = "1k" },
+  { name = "gtnhintergalactic:item.DysonSwarmParts", damage = 0, short = "Dyson", fatal = "500", warn = "1k" },
 }
 
 -- Fluid config fields:
 --   name: fluid registry name
 --   label: optional display name
---   min: required amount in mB, supports k/m/g/t suffix
+--   short: display name
+--   fatal/warn: required amount in mB, supports k/m/g/t suffix
 local FLUID_CONFIGS = {
-  {
-    name = "naquadah based liquid fuel mkvi",
-    aliases = {
-      "magmadah based liquid fuel mkvi",
-      "magmadah_based_liquid_fuel_mkvi",
-      "naquadah_based_liquid_fuel_mkvi",
-    },
-    min = "10k",
-  },
-  { name = "molten.infinity", min = "500m" },
-  { name = "temporalfluid", aliases = { "temporalFluid" }, min = "1m" },
-  { name = "exciteddtrc", min = "500m" },
-  { name = "exciteddtsc", min = "500m" },
+  { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "300k" },
+  { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
+  { name = "temporalfluid", short = "Time", fatal = "200k", warn = "1m" },
+  { name = "exciteddtrc", short = "cat 异星", fatal = "150m", warn = "500m" },
+  { name = "exciteddtsc", short = "cat 恒星", fatal = "50m", warn = "150m" },
 }
 
 local CHECK_INTERVAL = 10
@@ -40,6 +34,10 @@ local DISPLAY_HEIGHT = 25
 local gpu = component.isAvailable("gpu") and component.gpu or nil
 local meInterface = nil
 local meAddress = nil
+
+local COLOR_OK = 0x00FF00
+local COLOR_WARN = 0xFFFF00
+local COLOR_FATAL = 0xFF0000
 
 local suffixMultipliers = { k = 1e3, m = 1e6, g = 1e9, t = 1e12 }
 
@@ -133,7 +131,7 @@ end
 local function initDisplay()
   if gpu ~= nil then
     pcall(gpu.setViewport, DISPLAY_WIDTH, DISPLAY_HEIGHT)
-    pcall(gpu.setForeground, 0x00FF00)
+    pcall(gpu.setForeground, COLOR_OK)
   end
 end
 
@@ -148,12 +146,25 @@ end
 local function drawLines(lines)
   clearScreen()
   for row = 1, DISPLAY_HEIGHT do
-    local line = fitText(lines[row] or "", DISPLAY_WIDTH)
+    local entry = lines[row] or ""
+    local color = COLOR_OK
+    local text = entry
+    if type(entry) == "table" then
+      text = entry.text or ""
+      color = entry.color or COLOR_OK
+    end
+
+    local line = fitText(text, DISPLAY_WIDTH)
     if gpu ~= nil then
+      pcall(gpu.setForeground, color)
       gpu.set(1, row, padRight(line, DISPLAY_WIDTH))
     else
       io.write(line .. "\n")
     end
+  end
+
+  if gpu ~= nil then
+    pcall(gpu.setForeground, COLOR_OK)
   end
 end
 
@@ -195,16 +206,18 @@ end
 
 local function normalizeConfigs()
   for _, config in ipairs(ITEM_CONFIGS) do
-    config.min = parseNumber(config.min)
+    config.fatal = parseNumber(config.fatal or config.warn)
+    config.warn = parseNumber(config.warn or config.fatal)
   end
 
   for _, config in ipairs(FLUID_CONFIGS) do
-    config.min = parseNumber(config.min)
+    config.fatal = parseNumber(config.fatal or config.warn)
+    config.warn = parseNumber(config.warn or config.fatal)
   end
 end
 
 local function displayName(config)
-  return config.label or config.name or "unknown"
+  return config.short or config.label or config.name or "unknown"
 end
 
 local function itemMatches(stack, config)
@@ -241,38 +254,6 @@ local function getItemAmount(config)
   return total
 end
 
-local function fluidNameMatches(name, target)
-  if name == nil or target == nil then
-    return false
-  end
-  return tostring(name):lower() == tostring(target):lower()
-end
-
-local function fluidMatches(fluid, config)
-  if fluidNameMatches(fluid.name, config.name) then
-    return true
-  end
-
-  for _, alias in ipairs(config.aliases or {}) do
-    if fluidNameMatches(fluid.name, alias) then
-      return true
-    end
-  end
-
-  return false
-end
-
-local function addFluidQueryNames(names, config)
-  if config.name ~= nil and config.name ~= "" then
-    table.insert(names, config.name)
-  end
-  for _, alias in ipairs(config.aliases or {}) do
-    if alias ~= nil and alias ~= "" then
-      table.insert(names, alias)
-    end
-  end
-end
-
 local function getNetworkFluidAmounts()
   local fluids = safeCall(meInterface.getFluidsInNetwork) or {}
   local amounts = {}
@@ -303,37 +284,30 @@ local function getNetworkFluidAmounts()
 end
 
 local function getFluidAmount(config, amounts)
-  local total = 0
-  local names = {}
-  local seen = {}
-  addFluidQueryNames(names, config)
-
-  for _, name in ipairs(names) do
-    local key = tostring(name)
-    local lowerKey = key:lower()
-    if not seen[lowerKey] then
-      seen[lowerKey] = true
-      total = total + (amounts[key] or amounts[lowerKey] or 0)
-    end
-  end
-
-  return total
+  local key = tostring(config.name or config.label or "")
+  return amounts[key] or amounts[key:lower()] or 0
 end
 
-local function addStatusLine(lines, kind, name, current, target)
+local function addStatusLine(lines, name, current, config)
   local status = "ok"
-  if current < target then
-    status = "lack " .. formatNumber(target - current)
+  local color = COLOR_OK
+  if current < config.fatal then
+    status = "fatal " .. formatNumber(config.fatal - current)
+    color = COLOR_FATAL
+  elseif current < config.warn then
+    status = "warn " .. formatNumber(config.warn - current)
+    color = COLOR_WARN
   end
 
-  table.insert(lines, string.format(
-    "%-5s %-34s %10s / %-10s %s",
-    kind,
-    fitText(name, 34),
+  table.insert(lines, {
+    color = color,
+    text = string.format(
+    "%-24s %10s / %-10s %s",
+    fitText(name, 24),
     formatNumber(current),
-    formatNumber(target),
+    formatNumber(config.warn),
     status
-  ))
+  ) })
 end
 
 local function buildScreen()
@@ -356,18 +330,18 @@ local function buildScreen()
   else
     for _, config in ipairs(ITEM_CONFIGS) do
       local current = getItemAmount(config)
-      if current < config.min then
+      if current < config.warn then
         missing = missing + 1
       end
-      addStatusLine(lines, "ITEM", displayName(config), current, config.min)
+      addStatusLine(lines, displayName(config), current, config)
     end
 
     for _, config in ipairs(FLUID_CONFIGS) do
       local current = getFluidAmount(config, fluidAmounts)
-      if current < config.min then
+      if current < config.warn then
         missing = missing + 1
       end
-      addStatusLine(lines, "FLUID", displayName(config), current, config.min)
+      addStatusLine(lines, displayName(config), current, config)
     end
 
     if missing == 0 then
