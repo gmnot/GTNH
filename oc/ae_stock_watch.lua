@@ -18,9 +18,9 @@ local ITEM_CONFIGS = {
 --   label: optional display name
 --   min: required amount in mB, supports k/m/g/t suffix
 local FLUID_CONFIGS = {
-  { name = "magmadah_based_liquid_fuel_mkvi", min = "10k" },
+  { name = "magmadah based liquid fuel mkvi", min = "10k" },
   { name = "molten.infinity", min = "500m" },
-  { name = "temporalfluid", min = "1m" },
+  { name = "temporalfluid", aliases = { "temporalFluid" }, min = "1m" },
   { name = "excitedtec", min = "500m" },
 }
 
@@ -211,8 +211,17 @@ local function itemMatches(stack, config)
   return true
 end
 
-local function getItemAmount(config, items)
+local function getItemQuery(config)
+  local query = {}
+  if config.name ~= nil and config.name ~= "" then
+    query.name = config.name
+  end
+  return query
+end
+
+local function getItemAmount(config)
   local total = 0
+  local items = safeCall(meInterface.getItemsInNetwork, getItemQuery(config)) or {}
 
   for _, stack in ipairs(items or {}) do
     if type(stack) == "table" and itemMatches(stack, config) then
@@ -223,12 +232,54 @@ local function getItemAmount(config, items)
   return total
 end
 
-local function getFluidAmount(config, fluids)
-  local total = 0
+local function fluidNameMatches(name, target)
+  if name == nil or target == nil then
+    return false
+  end
+  return tostring(name):lower() == tostring(target):lower()
+end
 
-  for _, fluid in ipairs(fluids or {}) do
-    if type(fluid) == "table" and fluid.name == config.name then
-      total = total + (tonumber(fluid.amount) or 0)
+local function fluidMatches(fluid, config)
+  if fluidNameMatches(fluid.name, config.name) then
+    return true
+  end
+
+  for _, alias in ipairs(config.aliases or {}) do
+    if fluidNameMatches(fluid.name, alias) then
+      return true
+    end
+  end
+
+  return false
+end
+
+local function addFluidQueryNames(names, config)
+  if config.name ~= nil and config.name ~= "" then
+    table.insert(names, config.name)
+  end
+  for _, alias in ipairs(config.aliases or {}) do
+    if alias ~= nil and alias ~= "" then
+      table.insert(names, alias)
+    end
+  end
+end
+
+local function getFluidAmount(config)
+  local total = 0
+  local names = {}
+  local seen = {}
+  addFluidQueryNames(names, config)
+
+  for _, name in ipairs(names) do
+    local fluids = safeCall(meInterface.getFluidsInNetwork, { name = name }) or {}
+    for _, fluid in ipairs(fluids or {}) do
+      if type(fluid) == "table" and fluidMatches(fluid, config) then
+        local key = tostring(fluid.name or name):lower()
+        if not seen[key] then
+          seen[key] = true
+          total = total + (tonumber(fluid.amount) or 0)
+        end
+      end
     end
   end
 
@@ -247,19 +298,15 @@ local function addStatusLine(lines, kind, name, current, target)
 end
 
 local function buildScreen()
-  local itemList = safeCall(meInterface.getItemsInNetwork) or {}
-  local fluidList = safeCall(meInterface.getFluidsInNetwork) or {}
   local lines = {}
   local missing = 0
 
   table.insert(lines, "AE Stock Watch")
   table.insert(lines, "Interface: " .. tostring(meAddress))
   table.insert(lines, string.format(
-    "Items cfg:%d net:%d  Fluids cfg:%d net:%d  Uptime:%ds",
+    "Items cfg:%d  Fluids cfg:%d  Uptime:%ds",
     #ITEM_CONFIGS,
-    #itemList,
     #FLUID_CONFIGS,
-    #fluidList,
     math.floor(computer.uptime())
   ))
   table.insert(lines, string.rep("-", DISPLAY_WIDTH))
@@ -268,7 +315,7 @@ local function buildScreen()
     table.insert(lines, "No configs yet. Fill ITEM_CONFIGS and FLUID_CONFIGS at top of file.")
   else
     for _, config in ipairs(ITEM_CONFIGS) do
-      local current = getItemAmount(config, itemList)
+      local current = getItemAmount(config)
       if current < config.min then
         missing = missing + 1
         addStatusLine(lines, "ITEM", displayName(config), current, config.min)
@@ -276,7 +323,7 @@ local function buildScreen()
     end
 
     for _, config in ipairs(FLUID_CONFIGS) do
-      local current = getFluidAmount(config, fluidList)
+      local current = getFluidAmount(config)
       if current < config.min then
         missing = missing + 1
         addStatusLine(lines, "FLUID", displayName(config), current, config.min)
@@ -303,6 +350,7 @@ local function main()
 
   while true do
     drawLines(buildScreen())
+    collectgarbage()
     os.sleep(CHECK_INTERVAL)
   end
 end
