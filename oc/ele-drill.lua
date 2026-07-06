@@ -69,7 +69,7 @@ local FLUID_CONFIGS = {
     {"lava", "1g", 3, 3},
     {"methane", "1g", 5, 9},
     {"argon", "100m", 5, 7},
-    {"radon", "2g", 8, 6},
+    {"radon", "30g", 8, 6},
     {"xenon", "20g", 6, 4},
     {"krypton", "100g", 5, 8},
     {"molten.lead", "4g", 4, 5},
@@ -85,7 +85,7 @@ local MACHINES = {
 }
  
 local AUTO_DISCOVER_MACHINES, DEFAULT_MACHINE_LEVEL = true, 2
-local CHECK_INTERVAL, MAX_STOP_WAIT = 20, 60
+local CHECK_INTERVAL, MAX_STOP_WAIT = 60, 60
 
 local suffixMultipliers = {k = 1e3, m = 1e6, g = 1e9, t = 1e12}
 local function parseNumberWithSuffix(value)

@@ -10,6 +10,7 @@ local term = require("term")
 --   damage: optional metadata/damage filter
 --   min: required amount, supports k/m/g/t suffix
 local ITEM_CONFIGS = {
+  { name = "gtnhintergalactic:item.DysonSwarmParts", damage = 0, min = "1k" },
 }
 
 -- Fluid config fields:
@@ -17,6 +18,10 @@ local ITEM_CONFIGS = {
 --   label: optional display name
 --   min: required amount in mB, supports k/m/g/t suffix
 local FLUID_CONFIGS = {
+  { name = "magmadah_based_liquid_fuel_mkvi", min = "10k" },
+  { name = "molten.infinity", min = "500m" },
+  { name = "temporalfluid", min = "1m" },
+  { name = "excitedtec", min = "500m" },
 }
 
 local CHECK_INTERVAL = 5
