@@ -6,7 +6,7 @@ local term = require("term")
 -- Fill these yourself.
 -- Item config fields:
 --   name: registry name, optional if label is set
---   label: display name, optional if name is set
+--   label: display name, optional if name  is set
 --   damage: optional metadata/damage filter
 --   short: display name
 --   fatal/warn: thresholds, supports k/m/g/t suffix
@@ -23,8 +23,8 @@ local FLUID_CONFIGS = {
   { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "300k" },
   { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
   { name = "temporalfluid", short = "Time", fatal = "200k", warn = "1m" },
-  { name = "exciteddtrc", short = "cat 异星", fatal = "150m", warn = "500m" },
-  { name = "exciteddtsc", short = "cat 恒星", fatal = "50m", warn = "150m" },
+  { name = "exciteddtec", short = "cat 异星", fatal = "150m", warn = "500m" },
+  { name = "exciteddtsc", short = "cat 恒星", fatal =  "50m", warn = "150m" },
 }
 
 local CHECK_INTERVAL = 10

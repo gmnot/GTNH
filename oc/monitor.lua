@@ -1,4 +1,5 @@
 local component = require("component")
+local computer = require("computer")
 local gtm = component.gt_machine
 local term = require("term")
 local gpu = component.gpu
@@ -13,8 +14,17 @@ local glassesOffsetX = 3
 local glassesOffsetY = 16
 -- 存电只够一小时则红字警告
 local exhaustWarningSeconds = 3600
+local fluidCheckInterval = 10
+local maxFluidDisplayLines = 8
 -- 小于等于该值时使用逗号三位分隔；大于该值时使用科学计数法
 local displayScientificNumbersIfAbove = 1e9
+local FLUID_CONFIGS = {
+    { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "300k" },
+    { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
+    { name = "temporalfluid", short = "Time", fatal = "200k", warn = "1m" },
+    { name = "exciteddtrc", short = "cat A", fatal = "150m", warn = "500m" },
+    { name = "exciteddtsc", short = "cat B", fatal = "50m", warn = "150m" },
+}
 -- #endregion config
 -- #region constants
  
@@ -53,9 +63,14 @@ EU_Monitor.maxVoltageName = VOLTAGE_NAME_COLOR .. EU_Monitor.maxVoltageNameNoCol
 local texts = {}
 local GLASSES_BLACK_COLOR = { 0, 0, 0 }
 local GLASSES_RED_COLOR = { 255, 85, 85 }
+local GLASSES_YELLOW_COLOR = { 255, 255, 85 }
 local GLASSES_GREEN_COLOR = { 85, 255, 85 }
 local GLASSES_WHITE_COLOR = { 255, 255, 255 }
 local glasses = component.glasses
+local meInterface = nil
+local nextFluidCheck = 0
+local cachedFluidRows = {}
+local cachedFluidOkCount = 0
 -- #endregion constants
  
 -- main loop variable
@@ -68,6 +83,40 @@ local function formatNumber(number)
     local i, j, minus, int, fraction = string.format("%.1f", number):find('([-]?)(%d+)([.]?%d*)')
     int = int:reverse():gsub("(%d%d%d)", "%1,") -- reverse the int-string and append a comma to all blocks of 3 digits
     return minus .. int:reverse():gsub("^,", "") -- reverse the int-string back remove an optional comma and put the optional minus and fractional part back
+end
+
+local suffixMultipliers = { k = 1e3, m = 1e6, g = 1e9, t = 1e12 }
+
+local function parseNumber(value)
+    if type(value) == "number" then return value end
+    local text = tostring(value or ""):lower()
+    local numPart, suffix = text:match("^%s*([%d%.]+)%s*([kmgt]?)%s*$")
+    local number = tonumber(numPart)
+    if number == nil then error("invalid amount: " .. tostring(value)) end
+    return number * (suffixMultipliers[suffix] or 1)
+end
+
+local function formatAmount(value)
+    local number = tonumber(value) or 0
+    for _, unit in ipairs({ { "t", 1e12 }, { "g", 1e9 }, { "m", 1e6 }, { "k", 1e3 } }) do
+        if math.abs(number) >= unit[2] then
+            return string.format("%.1f%s", number / unit[2], unit[1])
+        end
+    end
+    return tostring(math.floor(number))
+end
+
+local function safeCall(fn, ...)
+    local ok, result = pcall(fn, ...)
+    if ok then return result end
+    return nil
+end
+
+local function normalizeFluidConfigs()
+    for _, config in ipairs(FLUID_CONFIGS) do
+        config.fatal = parseNumber(config.fatal or config.warn)
+        config.warn = parseNumber(config.warn or config.fatal)
+    end
 end
  
 local function extractNumber(alfanum)
@@ -87,6 +136,89 @@ local function getWirelessEU()
         end
     end
     return getEU(WirelessEUInfo)
+end
+
+local function initMeInterface()
+    if #FLUID_CONFIGS == 0 then return end
+    for addr in component.list("me_interface", true) do
+        local methods = safeCall(component.methods, addr) or {}
+        if methods.getFluidsInNetwork ~= nil then
+            meInterface = component.proxy(addr)
+            return
+        end
+    end
+end
+
+local function getNetworkFluidAmounts()
+    if meInterface == nil then return nil end
+    local fluids = safeCall(meInterface.getFluidsInNetwork)
+    if fluids == nil then return nil end
+    local amounts = {}
+    for _, fluid in ipairs(fluids) do
+        if type(fluid) == "table" and (fluid.name ~= nil or fluid.label ~= nil) then
+            local amount = tonumber(fluid.amount) or 0
+            if fluid.name ~= nil then
+                local key = tostring(fluid.name)
+                amounts[key] = (amounts[key] or 0) + amount
+                amounts[key:lower()] = (amounts[key:lower()] or 0) + amount
+            end
+            if fluid.label ~= nil then
+                local key = tostring(fluid.label)
+                amounts[key] = (amounts[key] or 0) + amount
+                amounts[key:lower()] = (amounts[key:lower()] or 0) + amount
+            end
+        end
+    end
+    return amounts
+end
+
+local function getFluidAmount(amounts, config)
+    local key = tostring(config.name or config.label or "")
+    return amounts[key] or amounts[key:lower()] or 0
+end
+
+local function updateFluidRows()
+    if #FLUID_CONFIGS == 0 then
+        cachedFluidRows = {}
+        cachedFluidOkCount = 0
+        return
+    end
+
+    local now = computer.uptime()
+    if now < nextFluidCheck then return end
+    nextFluidCheck = now + fluidCheckInterval
+
+    local amounts = getNetworkFluidAmounts()
+    local rows = {}
+    local okCount = 0
+
+    if amounts == nil then
+        table.insert(rows, { text = "AE fluids: unavailable", color = GLASSES_RED_COLOR })
+        cachedFluidRows = rows
+        cachedFluidOkCount = 0
+        return
+    end
+
+    for _, config in ipairs(FLUID_CONFIGS) do
+        local current = getFluidAmount(amounts, config)
+        local name = config.short or config.label or config.name
+        if current < config.fatal then
+            table.insert(rows, {
+                text = string.format("%s: %s/%s fatal", name, formatAmount(current), formatAmount(config.warn)),
+                color = GLASSES_RED_COLOR,
+            })
+        elseif current < config.warn then
+            table.insert(rows, {
+                text = string.format("%s: %s/%s warn", name, formatAmount(current), formatAmount(config.warn)),
+                color = GLASSES_YELLOW_COLOR,
+            })
+        else
+            okCount = okCount + 1
+        end
+    end
+
+    cachedFluidRows = rows
+    cachedFluidOkCount = okCount
 end
  
 ---@param glasses glasses # The glasses component.
@@ -126,7 +258,10 @@ local function glassesSetup(glasses)
     createShadowText(glasses, "income_5m", glassesOffsetX, glassesOffsetY + 1)
     createShadowText(glasses, "income_1h", glassesOffsetX, glassesOffsetY + 2)
     createShadowText(glasses, "storage", glassesOffsetX, glassesOffsetY + 3)
-    createShadowText(glasses, "exhaustTime", glassesOffsetX, glassesOffsetY + 4)
+    for i = 1, maxFluidDisplayLines do
+        createShadowText(glasses, "fluid_" .. tostring(i), glassesOffsetX, glassesOffsetY + 3 + i)
+    end
+    createShadowText(glasses, "fluid_summary", glassesOffsetX, glassesOffsetY + 4 + maxFluidDisplayLines)
 end
  
 -- 设置前景色并打印消息
@@ -148,6 +283,9 @@ local function getGTInfo(euPerTick, withColor)
     local voltage_for_tier = absValue / 2 / (4 ^ GT_SHOW_LOWER)
     -- 处理MAX电压特殊情况
     if absValue >= maxVoltageValue then
+        if not withColor then
+            return string.format("%sA", formatNumber(absValue/maxVoltageValue))
+        end
         return string.format("%sA "..maxVoltageName, formatNumber(absValue/maxVoltageValue))
     end
     -- 计算电压等级
@@ -155,6 +293,9 @@ local function getGTInfo(euPerTick, withColor)
     tier = math.max(1, math.min(tier, #voltageNames))
     -- 处理超出命名范围的情况
     if tier > #EU_Monitor.voltageNames then
+        if not withColor then
+            return string.format("%sA", formatNumber(absValue/maxVoltageValue))
+        end
         return string.format("%sA "..maxVoltageName, formatNumber(absValue/maxVoltageValue))
     end
     -- 计算电流值和电压名称
@@ -202,6 +343,7 @@ function EU_Monitor.update()
     local fiveMinAvg = calculateAverage(EU_Monitor.secondEU, 300)/20
     local hourAvg = calculateAverage(EU_Monitor.secondEU, 3600)/20
     local dayAvg = calculateAverage(EU_Monitor.secondEU, 86400)/20
+    updateFluidRows()
     -- 绘制屏幕
     term.clear()
     print(string.format("存量: %.2e EU", currentEU))
@@ -214,6 +356,11 @@ function EU_Monitor.update()
     print(string.format("五分钟均值: %s EU/t (%s)", toColorString(fiveMinAvg), getGTInfo(fiveMinAvg)))
     print(string.format("每小时均值: %s EU/t (%s)", toColorString(hourAvg), getGTInfo(hourAvg)))
     print(string.format("每天均值: %s EU/t (%s)", toColorString(dayAvg), getGTInfo(dayAvg)))
+    print(string.format("流体: 显示 %d, 满足 %d", #cachedFluidRows, cachedFluidOkCount))
+    for i, row in ipairs(cachedFluidRows) do
+        if i > maxFluidDisplayLines then break end
+        print(row.text)
+    end
     print()
     print("(按 Ctrl+C 关闭程序)")
     -- 绘制眼镜
@@ -224,9 +371,20 @@ function EU_Monitor.update()
         table.unpack(fiveMinAvg < 0 and GLASSES_RED_COLOR or fiveMinAvg > 0 and GLASSES_GREEN_COLOR or GLASSES_WHITE_COLOR))
     setShadowText("income_1h", string.format("1h: %s EU/t (%s)", formatNumber(hourAvg), getGTInfo(hourAvg, false)),
         table.unpack(hourAvg < 0 and GLASSES_RED_COLOR or hourAvg > 0 and GLASSES_GREEN_COLOR or GLASSES_WHITE_COLOR))
-    setShadowText("storage", string.format("储量: %s EU", formatNumber(currentEU)))
-    setShadowText("exhaustTime", ("耗尽时间: " .. ((exhaustSeconds <= 0) and "N/A" or formatTimeFromSeconds(exhaustSeconds))),
+    setShadowText("storage", string.format("储量: %s EU  耗尽: %s", formatNumber(currentEU), ((exhaustSeconds <= 0) and "N/A" or formatTimeFromSeconds(exhaustSeconds))),
         table.unpack((exhaustSeconds > 0 and exhaustSeconds < exhaustWarningSeconds) and GLASSES_RED_COLOR or GLASSES_WHITE_COLOR))
+    for i = 1, maxFluidDisplayLines do
+        local row = cachedFluidRows[i]
+        if row == nil then
+            setShadowText("fluid_" .. tostring(i), "")
+        else
+            setShadowText("fluid_" .. tostring(i), row.text, table.unpack(row.color))
+        end
+    end
+    local summaryY = (glassesOffsetY + 4 + math.min(#cachedFluidRows, maxFluidDisplayLines)) * 10
+    texts["fluid_summaryshadow"].setPosition(glassesOffsetX + 1, summaryY + 1)
+    texts["fluid_summary"].setPosition(glassesOffsetX, summaryY)
+    setShadowText("fluid_summary", string.format("%d targets ok", cachedFluidOkCount), table.unpack(GLASSES_GREEN_COLOR))
 end
  
 -- 捕获 Ctrl+C 事件进行优雅关机
@@ -236,6 +394,8 @@ end
  
 local function main()
     event.listen("interrupted", onInterrupted)
+    normalizeFluidConfigs()
+    initMeInterface()
     glassesSetup(glasses) -- 注册眼镜文字
     gpu.setViewport(SCREEN_WIDTH, SCREEN_HEIGHT)
     -- gpu.setBackground(0x44b6ff) -- 背景颜色，可自行修改
