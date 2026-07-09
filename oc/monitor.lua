@@ -21,8 +21,8 @@ local FLUID_CONFIGS = {
     { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "250k" },
     { name = "temporalfluid", short = "Time", fatal = "200k", warn = "1m" },
     { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
-    { name = "exciteddtrc", short = "cat A", fatal = "150m", warn = "500m" },
-    { name = "exciteddtsc", short = "cat B", fatal = "50m", warn = "150m" },
+    { name = "exciteddtec", short = "cat 4", fatal = "150m", warn = "500m" },
+    { name = "exciteddtsc", short = "cat 5", fatal = "50m", warn = "150m" },
 }
 
 -- #endregion config
