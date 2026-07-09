@@ -19,9 +19,9 @@ local maxFluidDisplayLines = 8
 -- 小于等于该值时使用逗号三位分隔；大于该值时使用科学计数法
 local displayScientificNumbersIfAbove = 1e9
 local FLUID_CONFIGS = {
-    { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "300k" },
-    { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
+    { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "250k" },
     { name = "temporalfluid", short = "Time", fatal = "200k", warn = "1m" },
+    { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
     { name = "exciteddtrc", short = "cat A", fatal = "150m", warn = "500m" },
     { name = "exciteddtsc", short = "cat B", fatal = "50m", warn = "150m" },
 }
@@ -50,9 +50,6 @@ local VOLTAGE_NAME_COLOR = "\27[35m"
 local SCREEN_RESET_COLOR = "\27[37m"
 local SCREEN_GREEN_COLOR = "\27[32m"
 local SCREEN_RED_COLOR = "\27[31m"
-local SCREEN_WIDTH = 80 -- 分辨率
-local SCREEN_HEIGHT = 14 -- 分辨率
- 
 for _, str in ipairs(EU_Monitor.voltageNamesNoColor) do
     local coloredStr = VOLTAGE_NAME_COLOR .. str .. SCREEN_RESET_COLOR
     table.insert(EU_Monitor.voltageNames, coloredStr)
@@ -70,6 +67,7 @@ local glasses = component.glasses
 local meInterface = nil
 local nextFluidCheck = 0
 local cachedFluidRows = {}
+local cachedFluidScreenRows = {}
 local cachedFluidOkCount = 0
 -- #endregion constants
  
@@ -180,6 +178,7 @@ end
 local function updateFluidRows()
     if #FLUID_CONFIGS == 0 then
         cachedFluidRows = {}
+        cachedFluidScreenRows = {}
         cachedFluidOkCount = 0
         return
     end
@@ -190,11 +189,14 @@ local function updateFluidRows()
 
     local amounts = getNetworkFluidAmounts()
     local rows = {}
+    local screenRows = {}
     local okCount = 0
 
     if amounts == nil then
         table.insert(rows, { text = "AE fluids: unavailable", color = GLASSES_RED_COLOR })
+        table.insert(screenRows, "AE fluids: unavailable")
         cachedFluidRows = rows
+        cachedFluidScreenRows = screenRows
         cachedFluidOkCount = 0
         return
     end
@@ -203,21 +205,25 @@ local function updateFluidRows()
         local current = getFluidAmount(amounts, config)
         local name = config.short or config.label or config.name
         if current < config.fatal then
+            table.insert(screenRows, string.format("%s: %s/%s fatal", name, formatAmount(current), formatAmount(config.warn)))
             table.insert(rows, {
                 text = string.format("%s: %s/%s fatal", name, formatAmount(current), formatAmount(config.warn)),
                 color = GLASSES_RED_COLOR,
             })
         elseif current < config.warn then
+            table.insert(screenRows, string.format("%s: %s/%s warn", name, formatAmount(current), formatAmount(config.warn)))
             table.insert(rows, {
                 text = string.format("%s: %s/%s warn", name, formatAmount(current), formatAmount(config.warn)),
                 color = GLASSES_YELLOW_COLOR,
             })
         else
+            table.insert(screenRows, string.format("%s: %s/%s ok", name, formatAmount(current), formatAmount(config.warn)))
             okCount = okCount + 1
         end
     end
 
     cachedFluidRows = rows
+    cachedFluidScreenRows = screenRows
     cachedFluidOkCount = okCount
 end
  
@@ -356,10 +362,9 @@ function EU_Monitor.update()
     print(string.format("五分钟均值: %s EU/t (%s)", toColorString(fiveMinAvg), getGTInfo(fiveMinAvg)))
     print(string.format("每小时均值: %s EU/t (%s)", toColorString(hourAvg), getGTInfo(hourAvg)))
     print(string.format("每天均值: %s EU/t (%s)", toColorString(dayAvg), getGTInfo(dayAvg)))
-    print(string.format("流体: 显示 %d, 满足 %d", #cachedFluidRows, cachedFluidOkCount))
-    for i, row in ipairs(cachedFluidRows) do
-        if i > maxFluidDisplayLines then break end
-        print(row.text)
+    print(string.format("流体: 告警 %d, 满足 %d", #cachedFluidRows, cachedFluidOkCount))
+    for _, row in ipairs(cachedFluidScreenRows) do
+        print(row)
     end
     print()
     print("(按 Ctrl+C 关闭程序)")
@@ -397,7 +402,6 @@ local function main()
     normalizeFluidConfigs()
     initMeInterface()
     glassesSetup(glasses) -- 注册眼镜文字
-    gpu.setViewport(SCREEN_WIDTH, SCREEN_HEIGHT)
     -- gpu.setBackground(0x44b6ff) -- 背景颜色，可自行修改
     term.clear()
     term.setCursorBlink(false)
