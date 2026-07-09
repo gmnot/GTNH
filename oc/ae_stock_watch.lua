@@ -11,7 +11,7 @@ local term = require("term")
 --   short: display name
 --   fatal/warn: thresholds, supports k/m/g/t suffix
 local ITEM_CONFIGS = {
-  { name = "gtnhintergalactic:item.DysonSwarmParts", damage = 0, short = "Dyson", fatal = "500", warn = "1k" },
+  -- { name = "gtnhintergalactic:item.DysonSwarmParts", damage = 0, short = "Dyson", fatal = "500", warn = "1k" },
 }
 
 -- Fluid config fields:
@@ -219,17 +219,20 @@ local function initMeInterface()
     error("no me_interface component")
   end
 
+  local needsItems = #ITEM_CONFIGS > 0
+  local needsFluids = #FLUID_CONFIGS > 0
   local candidates = {}
   for addr in component.list("me_interface", true) do
-    local itemMethods = hasMethod(addr, "getItemsInNetwork")
-    local fluidMethods = hasMethod(addr, "getFluidsInNetwork")
+    local methods = safeCall(component.methods, addr) or {}
+    local itemMethods = methods.getItemsInNetwork ~= nil
+    local fluidMethods = methods.getFluidsInNetwork ~= nil
     table.insert(candidates, {
       address = addr,
       items = itemMethods,
       fluids = fluidMethods,
     })
 
-    if itemMethods and fluidMethods then
+    if (not needsItems or itemMethods) and (not needsFluids or fluidMethods) then
       meAddress = addr
       meInterface = component.proxy(addr)
       return
@@ -247,7 +250,7 @@ local function initMeInterface()
       tostring(item.fluids)
     ))
   end
-  error("me_interface missing getItemsInNetwork/getFluidsInNetwork")
+  error("me_interface missing required methods")
 end
 
 local function normalizeConfigs()
@@ -429,10 +432,13 @@ local function buildScreen()
   if #ITEM_CONFIGS == 0 and #FLUID_CONFIGS == 0 then
     table.insert(lines, "No configs yet. Fill ITEM_CONFIGS and FLUID_CONFIGS at top of file.")
   else
-    local now = computer.uptime()
-    local refreshItems = now >= nextItemRefresh
-    if refreshItems then
-      nextItemRefresh = now + ITEM_REFRESH_INTERVAL
+    local refreshItems = false
+    if #ITEM_CONFIGS > 0 then
+      local now = computer.uptime()
+      refreshItems = now >= nextItemRefresh
+      if refreshItems then
+        nextItemRefresh = now + ITEM_REFRESH_INTERVAL
+      end
     end
 
     for index, config in ipairs(ITEM_CONFIGS) do
