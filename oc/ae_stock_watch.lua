@@ -28,14 +28,20 @@ local FLUID_CONFIGS = {
 }
 
 local CHECK_INTERVAL = 10
+local ITEM_REFRESH_INTERVAL = 60
 local DISPLAY_WIDTH = 64
 local DISPLAY_HEIGHT = 18
-local USE_FAST_FLUID_QUERY = true
+-- Querying each configured fluid separately looks cheap in OC timings, but each
+-- AE RPC can briefly lock the grid. A single full fluid snapshot is friendlier
+-- to wireless terminal opens and matches the access pattern used by anti.lua.
+local USE_FAST_FLUID_QUERY = false
 
 local gpu = component.isAvailable("gpu") and component.gpu or nil
 local meInterface = nil
 local meAddress = nil
 local fastFluidQueryDisabled = false
+local cachedItemAmounts = {}
+local nextItemRefresh = 0
 local perf = {
   item = 0,
   fluid = 0,
@@ -423,10 +429,20 @@ local function buildScreen()
   if #ITEM_CONFIGS == 0 and #FLUID_CONFIGS == 0 then
     table.insert(lines, "No configs yet. Fill ITEM_CONFIGS and FLUID_CONFIGS at top of file.")
   else
-    for _, config in ipairs(ITEM_CONFIGS) do
-      local itemStart = computer.uptime()
-      local current = getItemAmount(config)
-      perf.item = perf.item + (computer.uptime() - itemStart)
+    local now = computer.uptime()
+    local refreshItems = now >= nextItemRefresh
+    if refreshItems then
+      nextItemRefresh = now + ITEM_REFRESH_INTERVAL
+    end
+
+    for index, config in ipairs(ITEM_CONFIGS) do
+      local current = cachedItemAmounts[index]
+      if refreshItems or current == nil then
+        local itemStart = computer.uptime()
+        current = getItemAmount(config)
+        cachedItemAmounts[index] = current
+        perf.item = perf.item + (computer.uptime() - itemStart)
+      end
       if current < config.warn then
         missing = missing + 1
       end
@@ -476,7 +492,7 @@ local function buildScreen()
     formatMs(perf.drawAvg),
     formatMs(perf.totalAvg)
   ))
-  table.insert(lines, "Refresh: " .. tostring(CHECK_INTERVAL) .. "s")
+  table.insert(lines, "Refresh: " .. tostring(CHECK_INTERVAL) .. "s  Items: " .. tostring(ITEM_REFRESH_INTERVAL) .. "s")
   return lines
 end
 
