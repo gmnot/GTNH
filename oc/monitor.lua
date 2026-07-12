@@ -85,6 +85,14 @@ local function formatNumber(number)
     return minus .. int:reverse():gsub("^,", "")
 end
 
+local function lpad(value, width)
+    local text = tostring(value)
+    if string.len(text) >= width then
+        return text
+    end
+    return string.rep(" ", width - string.len(text)) .. text
+end
+
 local function parseNumber(value)
     if type(value) == "number" then return value end
     local text = tostring(value or ""):lower()
