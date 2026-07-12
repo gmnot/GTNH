@@ -284,7 +284,7 @@ end
 local function toColorString(value, width)
     local text = formatNumber(value)
     if width ~= nil then
-        text = lpad(text, width)
+        text = string.format("%" .. tostring(width) .. "s", text)
     end
     if value == 0 then return text end
     local colorCode = value < 0 and SCREEN_RED_COLOR or SCREEN_GREEN_COLOR
