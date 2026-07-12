@@ -57,8 +57,9 @@ local inputLowRetryDelay = 300
 local yieldEvery = 80
 
 local cycle = 0
-local firstKeep = nil
 local lastKeep = nil
+local totalIncAmount = 0
+local totalInputAmount = 0
 
 -- Two redstone input sides are required.
 local controlSides = nil
@@ -67,7 +68,6 @@ local gtmMachine = nil
 local gtmTank = nil
 local meInterface = nil
 local nextInputOk = nil
-local nextInputCheckTime = 0
 local stopReason = "unknown"
 
 local sideNames = {
@@ -100,8 +100,8 @@ local function lpad(value, width)
   return string.rep(" ", width - string.len(text)) .. text
 end
 
-local function formatSeconds(value)
-  return string.format("%.2f", value)
+local function formatPercent(value)
+  return string.format("%6.2f%%", value * 100)
 end
 
 local function tryInvoke(addr, name, ...)
@@ -694,23 +694,17 @@ local function printTankWaitFailure()
 end
 
 local function runOneBalance(firstCycleThisRun)
-  local precheckTime = 0
-
   if nextInputOk == nil then
-    local checkStart = computer.uptime()
     nextInputOk = checkInputFluids(inputFluidStartMin, "start")
-    precheckTime = computer.uptime() - checkStart
   end
 
   if not nextInputOk then
     nextInputOk = nil
-    nextInputCheckTime = 0
     stopReason = "input fluid low"
     return false
   end
 
   nextInputOk = nil
-  nextInputCheckTime = 0
 
   local putStartProgress = nil
   local putEndProgress = nil
@@ -718,8 +712,6 @@ local function runOneBalance(firstCycleThisRun)
   local takeEndProgress = nil
 
   if firstCycleThisRun then
-    local primeStart = computer.uptime()
-
     setMachineAllowed(false)
     setTankAllowed(false)
 
@@ -759,11 +751,6 @@ local function runOneBalance(firstCycleThisRun)
     setMachineAllowed(true)
 
     lastKeep = keep
-    if firstKeep == nil then
-      firstKeep = keep
-    end
-
-    nextInputCheckTime = computer.uptime() - primeStart
   else
     if waitProgressBelow(takeProgressMin) == nil then
       stopReason = "control off before next machine cycle"
@@ -778,8 +765,6 @@ local function runOneBalance(firstCycleThisRun)
   end
 
   cycle = cycle + 1
-
-  local takeStart = computer.uptime()
 
   -- Disable tank: pull antimatter back from hatches to tank after tick 1.
   setTankAllowed(false)
@@ -809,13 +794,9 @@ local function runOneBalance(firstCycleThisRun)
 
   local keep, remove = transferExcess(sum)
   takeEndProgress = progress()
-  local takeTime = computer.uptime() - takeStart
 
-  local checkStart = computer.uptime()
   local inputOk = checkInputFluids(inputFluidStopMin, "stop")
-  local checkTime = computer.uptime() - checkStart
   nextInputOk = inputOk
-  nextInputCheckTime = checkTime
 
   if not inputOk then
     setMachineAllowed(false)
@@ -827,10 +808,8 @@ local function runOneBalance(firstCycleThisRun)
     return false
   end
 
-  local putWaitStart = computer.uptime()
   local hitPutWindow = false
   putStartProgress, hitPutWindow = waitProgressAtLeastBeforeCycleEnd(putProgressMin)
-  local putWaitTime = computer.uptime() - putWaitStart
   if putStartProgress == nil then
     stopReason = "control off before machine put window"
     return false
@@ -840,8 +819,6 @@ local function runOneBalance(firstCycleThisRun)
     stopReason = "missed machine put window"
     return false
   end
-
-  local putStart = computer.uptime()
 
   -- Enable tank: distribute the trimmed antimatter back before the next tick 1.
   setTankAllowed(true)
@@ -853,14 +830,16 @@ local function runOneBalance(firstCycleThisRun)
     return false
   end
 
-  local putTime = computer.uptime() - putStart
-
-  local totInc = keep - firstKeep
   local inc = 0
   if lastKeep ~= nil then
-    inc = keep - lastKeep
+    inc = sum - lastKeep
+    totalIncAmount = totalIncAmount + inc
+    totalInputAmount = totalInputAmount + lastKeep
   end
-  local totalTime = nextInputCheckTime + precheckTime + takeTime + putWaitTime + putTime
+  local ave = 0
+  if totalInputAmount > 0 then
+    ave = totalIncAmount / totalInputAmount
+  end
   local amountWidth = math.max(8, string.len(tostring(threshold)) + 2)
   local deltaWidth = math.max(6, amountWidth - 2)
 
@@ -876,8 +855,8 @@ local function runOneBalance(firstCycleThisRun)
       lpad(keep, amountWidth) ..
       ", inc=" ..
       lpad(inc, deltaWidth) ..
-      ", tot_inc=" ..
-      lpad(totInc, deltaWidth) ..
+      ", ave=" ..
+      formatPercent(ave) ..
       ", take " ..
       tostring(takeStartProgress) ..
       "-" ..
@@ -885,20 +864,7 @@ local function runOneBalance(firstCycleThisRun)
       " | put " ..
       tostring(putStartProgress) ..
       "-" ..
-      tostring(putEndProgress) ..
-      ", T=" ..
-      formatSeconds(totalTime) ..
-      " s (" ..
-      formatSeconds(nextInputCheckTime) ..
-      "+" ..
-      formatSeconds(precheckTime) ..
-      "+" ..
-      formatSeconds(takeTime) ..
-      "+" ..
-      formatSeconds(putWaitTime) ..
-      "+" ..
-      formatSeconds(putTime) ..
-      ")"
+      tostring(putEndProgress)
     )
   end
 
