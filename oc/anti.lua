@@ -31,8 +31,12 @@ local inputFluids = {
 local inputFluidStopMin = math.sqrt(threshold) * 10
 local inputFluidStartMin = math.sqrt(threshold) * 300
 
--- Forge progress >= this is treated as active cycle.
-local runningProgressMin = 2
+-- The forge changes antimatter on tick 1. Pull after that, return before the next tick 1.
+-- Missing a return only idles the forge; missing a pull before the next tick 1 can lose a lot.
+local takeProgressMin = 2
+local machineCycleTicks = 20
+local tickSafeReturn = 5
+local putProgressMin = machineCycleTicks - tickSafeReturn
 
 -- Print every N cycles.
 local printEvery = 1
@@ -532,7 +536,7 @@ end
 local function waitCurrentCycleEnd(timeout)
   local startTime = computer.uptime()
 
-  while progress() >= runningProgressMin do
+  while progress() >= takeProgressMin do
     if timeout ~= nil and computer.uptime() - startTime > timeout then
       return false
     end
@@ -545,39 +549,43 @@ end
 local function safeStop()
   pcall(setMachineAllowed, false)
 
-  local ok, ended = pcall(waitCurrentCycleEnd, stopWaitTimeout)
-  if ok and not ended then
-    print("[warn] timeout waiting current cycle before tank stop")
+  local startTime = computer.uptime()
+  while progress() == 1 do
+    if computer.uptime() - startTime > stopWaitTimeout then
+      print("[warn] timeout waiting safe tick before tank stop")
+      break
+    end
+    os.sleep(0)
   end
 
   pcall(setTankAllowed, false)
 end
 
-local function waitResetWindow(label)
-  setMachineAllowed(false)
-
-  local p = progress()
-  if p >= runningProgressMin then
-    print(
-      "[sync] " ..
-      label ..
-      ": machine active, progress=" ..
-      tostring(p) ..
-      ", wait before reset"
-    )
-
-    while controlOn() and progress() >= runningProgressMin do
-      os.sleep(0.05)
+local function waitProgressAtLeastBeforeCycleEnd(target)
+  while controlOn() do
+    local p = progress()
+    if p >= target then
+      return p, true
     end
-
-    if not controlOn() then
-      return false
+    if p < takeProgressMin then
+      return p, false
     end
-
-    print("[sync] machine cycle ended, safe to reset")
+    os.sleep(0)
   end
 
-  return true
+  return nil, false
+end
+
+local function waitProgressBelow(target)
+  while controlOn() do
+    local p = progress()
+    if p < target then
+      return p
+    end
+    os.sleep(0)
+  end
+
+  return nil
 end
 
 local function keepRemove(sum)
@@ -643,36 +651,14 @@ end
 
 local function waitMachineStart()
   while controlOn() do
-    if progress() >= runningProgressMin then
-      return true
+    local p = progress()
+    if p >= takeProgressMin then
+      return p
     end
     os.sleep(0)
   end
 
-  return false
-end
-
-local function waitMachineEndAndCheckInputs()
-  local checked = false
-  local inputOk = true
-  local checkTime = 0
-
-  while controlOn() do
-    if not checked then
-      local checkStart = computer.uptime()
-      inputOk = checkInputFluids(inputFluidStopMin, "stop")
-      checkTime = computer.uptime() - checkStart
-      checked = true
-    end
-
-    if progress() < runningProgressMin then
-      return true, inputOk, checkTime
-    end
-
-    os.sleep(0.05)
-  end
-
-  return false, inputOk, checkTime
+  return nil
 end
 
 local function transferExcess(sum)
@@ -726,31 +712,79 @@ local function runOneBalance(firstCycleThisRun)
   nextInputOk = nil
   nextInputCheckTime = 0
 
-  local label = "reset"
+  local putStartProgress = nil
+  local putEndProgress = nil
+  local takeStartProgress = nil
+  local takeEndProgress = nil
+
   if firstCycleThisRun then
-    label = "first reset"
+    local primeStart = computer.uptime()
+
+    setMachineAllowed(false)
+    setTankAllowed(false)
+
+    local sum, got = waitTankNonZero(tankWaitTimeout)
+    if not got then
+      printTankWaitFailure()
+      stopReason = "tank wait failed"
+      return false
+    end
+
+    local keep, remove = transferExcess(sum)
+
+    putStartProgress = progress()
+    if putStartProgress >= takeProgressMin and putStartProgress < putProgressMin then
+      local hitPutWindow = false
+      putStartProgress, hitPutWindow = waitProgressAtLeastBeforeCycleEnd(putProgressMin)
+      if putStartProgress == nil then
+        stopReason = "control off before initial put window"
+        return false
+      end
+      if not hitPutWindow then
+        setMachineAllowed(false)
+        stopReason = "missed initial put window"
+        return false
+      end
+    end
+
+    setTankAllowed(true)
+
+    local emptied = waitTankEmpty()
+    putEndProgress = progress()
+    if not emptied then
+      stopReason = "control off while priming tank"
+      return false
+    end
+
+    setMachineAllowed(true)
+
+    lastKeep = keep
+    if firstKeep == nil then
+      firstKeep = keep
+    end
+
+    nextInputCheckTime = computer.uptime() - primeStart
+  else
+    if waitProgressBelow(takeProgressMin) == nil then
+      stopReason = "control off before next machine cycle"
+      return false
+    end
   end
 
-  local syncStart = computer.uptime()
-  if not waitResetWindow(label) then
-    stopReason = "control off during sync"
+  takeStartProgress = waitMachineStart()
+  if takeStartProgress == nil then
+    stopReason = "control off before machine take window"
     return false
   end
-  local syncTime = computer.uptime() - syncStart
 
   cycle = cycle + 1
 
-  local t0 = computer.uptime()
+  local takeStart = computer.uptime()
 
-  -- Disable tank: pull antimatter back from hatches to tank.
+  -- Disable tank: pull antimatter back from hatches to tank after tick 1.
   setTankAllowed(false)
 
-  local timeout = nil
-  if firstCycleThisRun then
-    timeout = tankWaitTimeout
-  end
-
-  local sum, got = waitTankNonZero(timeout)
+  local sum, got = waitTankNonZero(nil)
   if not got then
     printTankWaitFailure()
     stopReason = "tank wait failed"
@@ -768,48 +802,65 @@ local function runOneBalance(firstCycleThisRun)
       " loss=" ..
       tostring(lastKeep - sum)
     )
+    setMachineAllowed(false)
+    stopReason = "abnormal antimatter loss"
+    return false
   end
 
   local keep, remove = transferExcess(sum)
+  takeEndProgress = progress()
+  local takeTime = computer.uptime() - takeStart
 
-  -- Enable tank: distribute antimatter from tank to hatches.
+  local checkStart = computer.uptime()
+  local inputOk = checkInputFluids(inputFluidStopMin, "stop")
+  local checkTime = computer.uptime() - checkStart
+  nextInputOk = inputOk
+  nextInputCheckTime = checkTime
+
+  if not inputOk then
+    setMachineAllowed(false)
+    local ended = waitCurrentCycleEnd(stopWaitTimeout)
+    if not ended then
+      print("[warn] timeout waiting current cycle after input shortage")
+    end
+    stopReason = "input fluid low"
+    return false
+  end
+
+  local putWaitStart = computer.uptime()
+  local hitPutWindow = false
+  putStartProgress, hitPutWindow = waitProgressAtLeastBeforeCycleEnd(putProgressMin)
+  local putWaitTime = computer.uptime() - putWaitStart
+  if putStartProgress == nil then
+    stopReason = "control off before machine put window"
+    return false
+  end
+  if not hitPutWindow then
+    setMachineAllowed(false)
+    stopReason = "missed machine put window"
+    return false
+  end
+
+  local putStart = computer.uptime()
+
+  -- Enable tank: distribute the trimmed antimatter back before the next tick 1.
   setTankAllowed(true)
 
   local emptied = waitTankEmpty()
+  putEndProgress = progress()
   if not emptied then
     stopReason = "control off while emptying tank"
     return false
   end
 
-  local resetTime = computer.uptime() - t0
+  local putTime = computer.uptime() - putStart
 
-  setMachineAllowed(true)
-
-  local started = waitMachineStart()
-  if not started then
-    stopReason = "control off before machine start"
-    return false
-  end
-
-  local ended, inputOk, checkTime = waitMachineEndAndCheckInputs()
-  nextInputOk = inputOk
-  nextInputCheckTime = checkTime
-  if not ended then
-    stopReason = "control off before machine end"
-    return false
-  end
-
-  if firstKeep == nil then
-    firstKeep = keep
-  end
-
+  local totInc = keep - firstKeep
   local inc = 0
   if lastKeep ~= nil then
     inc = keep - lastKeep
   end
-
-  local totInc = keep - firstKeep
-  local totalTime = nextInputCheckTime + precheckTime + syncTime + resetTime
+  local totalTime = nextInputCheckTime + precheckTime + takeTime + putWaitTime + putTime
   local amountWidth = math.max(8, string.len(tostring(threshold)) + 2)
   local deltaWidth = math.max(6, amountWidth - 2)
 
@@ -827,6 +878,14 @@ local function runOneBalance(firstCycleThisRun)
       lpad(inc, deltaWidth) ..
       ", tot_inc=" ..
       lpad(totInc, deltaWidth) ..
+      ", take " ..
+      tostring(takeStartProgress) ..
+      "-" ..
+      tostring(takeEndProgress) ..
+      " | put " ..
+      tostring(putStartProgress) ..
+      "-" ..
+      tostring(putEndProgress) ..
       ", T=" ..
       formatSeconds(totalTime) ..
       " s (" ..
@@ -834,9 +893,11 @@ local function runOneBalance(firstCycleThisRun)
       "+" ..
       formatSeconds(precheckTime) ..
       "+" ..
-      formatSeconds(syncTime) ..
+      formatSeconds(takeTime) ..
       "+" ..
-      formatSeconds(resetTime) ..
+      formatSeconds(putWaitTime) ..
+      "+" ..
+      formatSeconds(putTime) ..
       ")"
     )
   end
@@ -852,6 +913,14 @@ local function main()
   initSides()
 
   print("[init] threshold=" .. tostring(threshold))
+  print(
+    "[init] take>=" ..
+    tostring(takeProgressMin) ..
+    ", put>=" ..
+    tostring(putProgressMin) ..
+    ", tick_safe_return=" ..
+    tostring(tickSafeReturn)
+  )
   print("[init] input fluids=" .. tostring(#inputFluids))
   print("[init] waiting for 2 redstone input sides")
 
