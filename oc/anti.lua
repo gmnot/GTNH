@@ -147,7 +147,7 @@ local function initMeInterface()
 
     if methods ~= nil and methods.getFluidsInNetwork ~= nil then
       meInterface = component.proxy(addr)
-      print("[init] me_interface=" .. tostring(addr))
+      -- print("[init] me_interface=" .. tostring(addr))
       print("[init] input fluid stop min=" .. string.format("%.2f", inputFluidStopMin))
       print("[init] input fluid start min=" .. string.format("%.2f", inputFluidStartMin))
       return
@@ -458,8 +458,6 @@ local function initGtMachines()
   print("[init] forge=" .. tostring(gtmMachine))
   print(
     "[init] tank=" ..
-    tostring(gtmTank) ..
-    " name=" ..
     tostring(invoke(gtmTank, "getName"))
   )
 end
