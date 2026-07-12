@@ -145,11 +145,17 @@ local function getNetworkFluidAmounts()
     for _, fluid in ipairs(fluids) do
         if type(fluid) == "table" and (fluid.name ~= nil or fluid.label ~= nil) then
             local amount = tonumber(fluid.amount) or 0
+            local seenKeys = {}
             for _, rawKey in ipairs({ fluid.name, fluid.label }) do
                 if rawKey ~= nil then
                     local key = tostring(rawKey)
-                    amounts[key] = (amounts[key] or 0) + amount
-                    amounts[key:lower()] = (amounts[key:lower()] or 0) + amount
+                    local lowerKey = key:lower()
+                    for _, normalizedKey in ipairs({ key, lowerKey }) do
+                        if not seenKeys[normalizedKey] then
+                            seenKeys[normalizedKey] = true
+                            amounts[normalizedKey] = (amounts[normalizedKey] or 0) + amount
+                        end
+                    end
                 end
             end
         end
@@ -178,6 +184,10 @@ local function updateFluidRows()
     local rows = {}
     local screenRows = {}
     local okCount = 0
+    local nameWidth = 0
+    local amountWidth = 0
+    local warnWidth = 0
+    local screenItems = {}
 
     if amounts == nil then
         table.insert(rows, { text = "AE fluids: unavailable", color = GLASSES_RED_COLOR })
@@ -191,18 +201,39 @@ local function updateFluidRows()
     for _, config in ipairs(FLUID_CONFIGS) do
         local current = getFluidAmount(amounts, config)
         local name = config.short or config.label or config.name
+        local currentText = formatAmount(current)
+        local warnText = formatAmount(config.warn)
         local text
         if current < config.fatal then
-            text = string.format("%s: %s/%s fatal", name, formatAmount(current), formatAmount(config.warn))
+            text = string.format("%s: %s/%s fatal", name, currentText, warnText)
             table.insert(rows, { text = text, color = GLASSES_RED_COLOR })
         elseif current < config.warn then
-            text = string.format("%s: %s/%s warn", name, formatAmount(current), formatAmount(config.warn))
+            text = string.format("%s: %s/%s warn", name, currentText, warnText)
             table.insert(rows, { text = text, color = GLASSES_YELLOW_COLOR })
         else
-            text = string.format("%s: %s/%s ok", name, formatAmount(current), formatAmount(config.warn))
+            text = string.format("%s: %s/%s ok", name, currentText, warnText)
             okCount = okCount + 1
         end
-        table.insert(screenRows, text)
+        local status = current < config.fatal and "fatal" or current < config.warn and "warn" or "ok"
+        nameWidth = math.max(nameWidth, string.len(name))
+        amountWidth = math.max(amountWidth, string.len(currentText))
+        warnWidth = math.max(warnWidth, string.len(warnText))
+        table.insert(screenItems, {
+            name = name,
+            current = currentText,
+            warn = warnText,
+            status = status,
+        })
+    end
+
+    for _, item in ipairs(screenItems) do
+        table.insert(screenRows, string.format(
+            "%-" .. tostring(nameWidth) .. "s  %" .. tostring(amountWidth) .. "s / %-" .. tostring(warnWidth) .. "s  %s",
+            item.name,
+            item.current,
+            item.warn,
+            item.status
+        ))
     end
 
     cachedFluidRows = rows
@@ -242,10 +273,14 @@ local function glassesSetup()
     createShadowText("fluid_summary", glassesOffsetX, glassesOffsetY + 4 + maxFluidDisplayLines)
 end
 
-local function toColorString(value)
-    if value == 0 then return "0" end
+local function toColorString(value, width)
+    local text = formatNumber(value)
+    if width ~= nil then
+        text = lpad(text, width)
+    end
+    if value == 0 then return text end
     local colorCode = value < 0 and SCREEN_RED_COLOR or SCREEN_GREEN_COLOR
-    return string.format(colorCode .. "%s" .. SCREEN_RESET_COLOR, formatNumber(value))
+    return string.format(colorCode .. "%s" .. SCREEN_RESET_COLOR, text)
 end
 
 local function getGTInfo(euPerTick, withColor)
@@ -318,16 +353,16 @@ function EU_Monitor.update()
 
     term.clear()
     term.setCursor(1, 1)
-    print(string.format("存量: %.2e EU", currentEU))
-    print(string.format("可用功率(秒): %.1e EU/s (%s)", currentEU / 20, getGTInfo(currentEU / 20)))
-    print(string.format("可用功率(小时): %.1e EU/hour (%s)", currentEU / 3600 / 20, getGTInfo(currentEU / 3600 / 20)))
-    print(string.format("可用功率(天): %.1e EU/day (%s)", currentEU / 3600 / 20 / 24, getGTInfo(currentEU / 3600 / 20 / 24)))
+    print(string.format("%-16s %12.2e EU", "存量:", currentEU))
+    print(string.format("%-16s %12.1e EU/s    (%s)", "可用功率(秒):", currentEU / 20, getGTInfo(currentEU / 20)))
+    print(string.format("%-16s %12.1e EU/hour (%s)", "可用功率(小时):", currentEU / 3600 / 20, getGTInfo(currentEU / 3600 / 20)))
+    print(string.format("%-16s %12.1e EU/day  (%s)", "可用功率(天):", currentEU / 3600 / 20 / 24, getGTInfo(currentEU / 3600 / 20 / 24)))
     print()
-    print(string.format("每五秒均值: %s EU/t (%s)", toColorString(fiveSecAvg), getGTInfo(fiveSecAvg)))
-    print(string.format("每分钟均值: %s EU/t (%s)", toColorString(minuteAvg), getGTInfo(minuteAvg)))
-    print(string.format("五分钟均值: %s EU/t (%s)", toColorString(fiveMinAvg), getGTInfo(fiveMinAvg)))
-    print(string.format("每小时均值: %s EU/t (%s)", toColorString(hourAvg), getGTInfo(hourAvg)))
-    print(string.format("每天均值: %s EU/t (%s)", toColorString(dayAvg), getGTInfo(dayAvg)))
+    print(string.format("%-16s %16s EU/t (%s)", "每五秒均值:", toColorString(fiveSecAvg, 16), getGTInfo(fiveSecAvg)))
+    print(string.format("%-16s %16s EU/t (%s)", "每分钟均值:", toColorString(minuteAvg, 16), getGTInfo(minuteAvg)))
+    print(string.format("%-16s %16s EU/t (%s)", "五分钟均值:", toColorString(fiveMinAvg, 16), getGTInfo(fiveMinAvg)))
+    print(string.format("%-16s %16s EU/t (%s)", "每小时均值:", toColorString(hourAvg, 16), getGTInfo(hourAvg)))
+    print(string.format("%-16s %16s EU/t (%s)", "每天均值:", toColorString(dayAvg, 16), getGTInfo(dayAvg)))
     print(string.format("流体: 告警 %d, 满足 %d", #cachedFluidRows, cachedFluidOkCount))
     for _, row in ipairs(cachedFluidScreenRows) do
         print(row)
