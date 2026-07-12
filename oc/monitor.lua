@@ -18,8 +18,10 @@ local maxFluidDisplayLines = 8
 local displayScientificNumbersIfAbove = 1e9
 
 local FLUID_CONFIGS = {
-    { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "10k", warn = "250k" },
-    { name = "temporalfluid", short = "Time", fatal = "200k", warn = "1m" },
+    { name = "naquadah based liquid fuel mkvi (depleted)", short = "NqFuel VI D", fatal = "500k", warn = "1m" },
+    { name = "naquadah based liquid fuel mkvi", short = "NqFuel VI", fatal = "50k", warn = "300k" },
+    { name = "molten.eternity", short = "Eternity", fatal = "10m", warn = "40m" },
+    { name = "temporalfluid"  , short = "Time", fatal = "10m", warn = "40m" },
     { name = "molten.infinity", short = "Inf", fatal = "500m", warn = "2g" },
     { name = "exciteddtec", short = "cat 4", fatal = "150m", warn = "500m" },
     { name = "exciteddtsc", short = "cat 5", fatal = "50m", warn = "150m" },
