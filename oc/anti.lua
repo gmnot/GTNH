@@ -18,11 +18,11 @@ local rs = component.redstone
 local sideTank = nil
 local sideOutput = nil
 
-local threshold = 1876592  -- best for Sh
+local threshold = 7615776  -- best for Sh
 
 local inputFluids = {
   "temporalfluid",
-  "spatialfluid",
+  "molten.eternity",
   "molten.shirabon",
   "naquadah based liquid fuel mkvi (depleted)",
   "protomatter",
