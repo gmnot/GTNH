@@ -1,11 +1,11 @@
 local os = require("os")
 local component = require("component")
 local sides = require("sides")
- 
+
 local trans = component.transposer
-local sideCacheBuffer = sides.south      -- 转运器对应的 大型原料缓存仓
-local sideAEInfusion = sides.east        -- 转运器对应的 ae的物质聚合器
-local sideInterface = sides.down         -- 转运器对应的 主网也是是唯一的ae接口 用于设置流体的输出
+local sideCacheBuffer = sides.down       -- 转运器对应的 大型原料缓存仓
+local sideAEInfusion = sides.north       -- 转运器对应的 ae的物质聚合器
+local sideInterface = sides.east         -- 转运器对应的 主网也是是唯一的ae接口 用于设置流体的输出
 local database = component.database
 local mei = component.me_interface
 local gtm = component.gt_machine
