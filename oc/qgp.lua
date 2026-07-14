@@ -16,8 +16,18 @@ local cacheTable = {}
  
 local fcFluidDrop = "ae2fc:fluid_drop"
 local gtMaterial = {
-    [2055]="cadmium",
-    [2076]="thulium"}
+    [382]="ardite",      [2884]="desh",        [2393]="oriharukon",  [2340]="meteoriciron", [2103]="americium",
+    [2006]="lithium",    [2008]="beryllium",   [2010]="carbon",      [2017]="sodium",       [2018]="magnesium",
+    [2019]="aluminium",  [2020]="silicon",     [2021]="phosphorus",  [2022]="sulfur",       [2025]="potassium",
+    [2026]="calcium",    [2028]="titanium",    [2029]="vanadium",    [2031]="manganese",    [2032]="iron",
+    [2033]="cobalt",     [2034]="nickel",      [2035]="copper",      [2036]="zinc",         [2037]="gallium",
+    [2039]="arsenic",    [2043]="rubidium",    [2044]="strontium",   [2045]="yttrium",      [2047]="niobium",
+    [2048]="molybdenum", [2052]="palladium",   [2054]="silver",      [2055]="cadmium",      [2056]="indium",
+    [2057]="tin",        [2058]="antimony",    [2059]="tellurium",   [2062]="caesium",      [2063]="barium",
+    [2064]="lanthanum",  [2065]="cerium",      [2066]="praseodymium",[2067]="neodymium",    [2068]="promethium",
+    [2069]="samarium",   [2070]="europium",    [2071]="gadolinium",  [2072]="terbium",      [2073]="dysprosium",
+    [2074]="holmium",    [2075]="erbium",      [2076]="thulium",     [2077]="ytterbium",    [2078]="lutetium",
+    [2080]="tantalum",   [2081]="tungsten",    [2086]="gold",        [2097]="uranium235",   [2098]="uranium"}
 local bartMaterial = {
     [3]="zirconium",
     [30]="thorium232",
