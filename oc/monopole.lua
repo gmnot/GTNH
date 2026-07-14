@@ -15,6 +15,23 @@ local GTMaterial = {
     [2129] = "Neutronium", [0] = "Draconium", [2976] = "DraconiumAwakened",        -- GT材料的处理 因为部分材料对应的等离子单元查找不到
     [2978] = "Ichorium", [2982] = "CosmicNeutronium", [2984] = "Flerovium_GT5U",      -- 同时生成的单元没有对应的液体名称 故此手动标记全部gt材料 因为比较少
     [2397] = "Infinity", [2329] = "Tritanium", [2395] = "Bedrockium"}           -- 分别是 中子、龙、觉醒龙、灵宝、黑中子、夫(金字旁的)、无尽、三钛、基岩 防止oc出问题
+
+function describeItem(item)
+    if item == nil then return "nil" end
+    return string.format(
+        "%s | name=%s damage=%s size=%s",
+        tostring(item.label or "unknown"),
+        tostring(item.name or "unknown"),
+        tostring(item.damage or "nil"),
+        tostring(item.size or "nil")
+    )
+end
+
+function tankAmount(side, tank)
+    local info = trans.getFluidInTank(side, tank)
+    if info == nil then return 0 end
+    return tonumber(info.amount) or 0
+end
  
 function setAE2FCPlasma(materialName)
     database.set( 1, fcFluidDrop, 0, "{Fluid:plasma." .. materialName .. "}")
@@ -72,63 +89,100 @@ function requestItem(item)
         os.sleep(2)
     end
 end
- 
+
 function main()
- 
-    os.execute("cls")
- 
+    local cycle = 0
+
     while true do
- 
         local item = trans.getStackInSlot(sideCacheBuffer, 1)
- 
+
         if item ~= nil then
-            print("即将执行数据库初始化。。。")
-            -- 获取配方对应的等离子数量
-            local fluidAmount = math.abs(trans.getFluidInTank(sideCacheBuffer, 1).amount - trans.getFluidInTank(sideCacheBuffer, 2).amount) * 144
-            -- 数据库设置对应的等离子
+            cycle = cycle + 1
+            print(string.format("[cycle %d] item: %s", cycle, describeItem(item)))
+            print("[cycle " .. tostring(cycle) .. "] init database")
+
+            local tank1Amount = tankAmount(sideCacheBuffer, 1)
+            local tank2Amount = tankAmount(sideCacheBuffer, 2)
+            local fluidAmount = math.abs(tank1Amount - tank2Amount) * 144
+            local initialFluidAmount = fluidAmount
+
             local materialName
-            if item.name:match("miscutils:itemDust*") ~= nil then   -- 对于GT++的材料进行处理 直接生成对应的液滴
+            if item.name:match("miscutils:itemDust*") ~= nil then
                 materialName = string.lower(string.match(item.name, "miscutils:itemDust" .. "(%w+)$"))
-            else -- 除了GT++的材料 没有bart的材料 如果之后出现了 再处理
+            else
                 materialName = string.lower(GTMaterial[item.damage])
             end
+
+            print(string.format(
+                "[cycle %d] material=%s, tank1=%s, tank2=%s, transfer_total=%s",
+                cycle,
+                tostring(materialName),
+                tostring(tank1Amount),
+                tostring(tank2Amount),
+                tostring(initialFluidAmount)
+            ))
+
             setAE2FCPlasma(materialName)
-            clearCacheBuffer()      -- 清除材料缓存器的液体/物品
+            clearCacheBuffer()
             os.sleep(0.25)
- 
-            print("即将执行等离子的处理操作。。。")
-            mei.setFluidInterfaceConfiguration(0, database.address, 1)      -- 标记接口处的流体
-            os.sleep(0.25)          -- 一个等待时间
+
+            print("[cycle " .. tostring(cycle) .. "] start plasma transfer")
+            mei.setFluidInterfaceConfiguration(0, database.address, 1)
+            os.sleep(0.25)
+
             ::retryIfEmpty::
-            if trans.getFluidInTank(sideInterface, 1).amount == 0 then      -- 流体不足 需要下单
+            if tankAmount(sideInterface, 1) == 0 then
                 requestItem(database.get(1))
-                if trans.getFluidInTank(sideInterface, 1).amount == 0 then  -- 防止一些问题 同时打印问题
+                if tankAmount(sideInterface, 1) == 0 then
+                    print("[cycle " .. tostring(cycle) .. "] fluid still empty after request, retry")
                     goto retryIfEmpty
-                    print("下单对应的流体数量可能太少了或者被动,导致获取不到对应流体")
                 end
             end
- 
-            while fluidAmount > 0 do     -- 消耗流体
-                if trans.getFluidInTank(sideInterface, 1).amount == 0 then goto retryIfEmpty end
-                local a,b = trans.transferFluid(sideInterface, sideCacheBuffer, fluidAmount, 0)
-                fluidAmount = fluidAmount - b
+
+            while fluidAmount > 0 do
+                local available = tankAmount(sideInterface, 1)
+                if available == 0 then
+                    print("[cycle " .. tostring(cycle) .. "] interface empty, retry request")
+                    goto retryIfEmpty
+                end
+
+                local requested = fluidAmount
+                print(string.format(
+                    "[cycle %d] transfer request=%s available=%s remaining_before=%s",
+                    cycle,
+                    tostring(requested),
+                    tostring(available),
+                    tostring(fluidAmount)
+                ))
+
+                local _, moved = trans.transferFluid(sideInterface, sideCacheBuffer, requested, 0)
+                moved = tonumber(moved) or 0
+                fluidAmount = fluidAmount - moved
+                print(string.format(
+                    "[cycle %d] transferred=%s remaining_after=%s",
+                    cycle,
+                    tostring(moved),
+                    tostring(fluidAmount)
+                ))
+
                 os.sleep(0.25)
             end
+
+            print(string.format("[cycle %d] done total=%s", cycle, tostring(initialFluidAmount)))
             os.sleep(1)
-            mei.setFluidInterfaceConfiguration(0)   -- 清除接口标记的流体
+            mei.setFluidInterfaceConfiguration(0)
         end
- 
-        os.execute("cls")
-        os.sleep(5)     -- 每轮结束的休息时间 默认5s 同时也用于机器的关机或者也可以关机oc(
- 
+
+        os.sleep(5)
+
         if not gtm.isWorkAllowed() then
-            print("机器已关机,正在待机休眠中。。。。")
+            print("[idle] machine disabled, waiting")
             while not gtm.isWorkAllowed() do
                 os.sleep(10)
             end
+            print("[idle] machine enabled, resume")
         end
     end
-    
 end
- 
+
 main()

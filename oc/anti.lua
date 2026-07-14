@@ -35,7 +35,7 @@ local inputFluidStartMin = math.sqrt(threshold) * 300
 -- Missing a return only idles the forge; missing a pull before the next tick 1 can lose a lot.
 local takeProgressMin = 2
 local machineCycleTicks = 20
-local tickSafeReturn = 5
+local tickSafeReturn = 4
 local putProgressMin = machineCycleTicks - tickSafeReturn
 
 -- Print every N cycles.
