@@ -15,6 +15,9 @@ local cacheCount = 1
 local cacheTable = {}
  
 local fcFluidDrop = "ae2fc:fluid_drop"
+local gtMaterial = {
+    [2055]="cadmium",
+    [2076]="thulium"}
 local bartMaterial = {
     [3]="zirconium",
     [30]="thorium232",
@@ -48,7 +51,10 @@ function setDatabase()
             materialName = string.lower(string.match(item.name, "miscutils:itemDust" .. "(%w+)$"))
         elseif item.name == "gregtech:gt.metaitem.01" then              -- 对于GT材料系统生成的材料使用对应的的等离子单元进行标记
                                                                         -- 有对应的特征 粉的metaID + 29000 对应的物品就是等离子单元
-            if item.damage == 382 then
+            materialName = gtMaterial[item.damage]
+            if materialName ~= nil then
+                -- Handled by setAE2FCPlasma below.
+            elseif item.damage == 382 then
                 materialName = "ardite"        -- 由于阿迪特等离子单元比较特殊 故 需要特殊处理
             else
                 database.set(cacheCount, "gregtech:gt.metaitem.01", 29000 + item.damage, "")
@@ -196,9 +202,7 @@ function printFluidInfo()
 end
  
 function main()
- 
-    os.execute("cls")
- 
+  
     while true do
         cacheCount = 1
         cacheTable = {}
@@ -232,10 +236,7 @@ function main()
                 -- 确保下一轮原料不会被堵塞
                 waitForMachineAndClearPlasma()
             end
- 
         end
- 
-        os.execute("cls")
         os.sleep(5)
  
         if not gtm.isWorkAllowed() then
@@ -244,9 +245,7 @@ function main()
                 os.sleep(10)
             end
         end
-        
     end
- 
 end
  
 main()
