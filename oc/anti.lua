@@ -2,6 +2,7 @@ local component = require("component")
 local computer = require("computer")
 local os = require("os")
 local sides = require("sides")
+local term = require("term")
 
 if not component.isAvailable("transposer") then
   error("no transposer component")
@@ -17,7 +18,10 @@ local rs = component.redstone
 local tankSide = nil
 local outputSide = nil
 
-local threshold = 7615776
+local threshold = 8014224
+local e_yield = 1888.4
+local sigma_yield = 1567.0
+
 local takeProgress = 2
 local cycleTicks = 20
 local putTick = 16
@@ -27,6 +31,9 @@ local tankWaitTimeout = 5
 local stopWaitTimeout = 3
 local transferRetryDelay = 1
 local printEvery = 1
+local clearEvery = 40
+local bucketSeconds = 300
+local windowBuckets = 96
 
 local allSides = {
   sides.down,
@@ -52,8 +59,8 @@ local controlSides = nil
 local stopReason = "unknown"
 local cycle = 0
 local lastKeep = nil
-local totalGain = 0
-local totalInput = 0
+local totalStats = {n = 0, sum = 0, sumSq = 0, take = 0, put = 0}
+local buckets = {}
 
 local function sideName(side)
   local name = sideNames[side] or "unknown"
@@ -63,6 +70,105 @@ end
 local function pad(value, width)
   local text = tostring(value)
   return string.rep(" ", math.max(0, width - #text)) .. text
+end
+
+local function normalCdf(z)
+  local negative = z < 0
+  z = math.abs(z)
+  local t = 1 / (1 + 0.2316419 * z)
+  local poly = 1.330274429
+  poly = -1.821255978 + t * poly
+  poly = 1.781477937 + t * poly
+  poly = -0.356563782 + t * poly
+  poly = 0.319381530 + t * poly
+  local density = 0.3989422804 * math.exp(-0.5 * z * z)
+  local value = 1 - density * t * poly
+  return negative and 1 - value or value
+end
+
+local function addSample(stats, value, takeEnd, putEnd)
+  stats.n = stats.n + 1
+  stats.sum = stats.sum + value
+  stats.sumSq = stats.sumSq + value * value
+  stats.take = math.max(stats.take, takeEnd)
+  stats.put = math.max(stats.put, putEnd)
+end
+
+local function addAggregate(stats, item)
+  stats.n = stats.n + item.n
+  stats.sum = stats.sum + item.sum
+  stats.sumSq = stats.sumSq + item.sumSq
+  stats.take = math.max(stats.take, item.take)
+  stats.put = math.max(stats.put, item.put)
+end
+
+local function recordStats(value, takeEnd, putEnd)
+  addSample(totalStats, value, takeEnd, putEnd)
+  local key = math.floor(computer.uptime() / bucketSeconds)
+  local slot = key % windowBuckets + 1
+  local item = buckets[slot]
+  if not item or item.key ~= key then
+    item = {
+      key = key,
+      n = 0,
+      sum = 0,
+      sumSq = 0,
+      take = 0,
+      put = 0,
+    }
+    buckets[slot] = item
+  end
+  addSample(item, value, takeEnd, putEnd)
+end
+
+local function windowStats()
+  local stats = {n = 0, sum = 0, sumSq = 0, take = 0, put = 0}
+  local now = math.floor(computer.uptime() / bucketSeconds)
+  for _, item in pairs(buckets) do
+    local age = now - item.key
+    if age >= 0 and age < windowBuckets then
+      addAggregate(stats, item)
+    end
+  end
+  return stats
+end
+
+local function healthScore(stats)
+  if stats.n == 0 or sigma_yield <= 0 then
+    return nil
+  end
+  local mean = stats.sum / stats.n
+  local errorOfMean = sigma_yield / math.sqrt(stats.n)
+  local z = (mean - e_yield) / errorOfMean
+  return math.min(1, 2 * normalCdf(z)) * 100
+end
+
+local function statsLine(label, stats)
+  if stats.n == 0 then
+    return string.format("[%-5s] no completed cycles", label)
+  end
+  local mean = stats.sum / stats.n
+  local relative = mean / e_yield * 100
+  local health = healthScore(stats)
+  local msg = string.format(
+    "[%-5s] %.1f | %.1f%% ok=%.1f%% n=%7d",
+    label,
+    mean,
+    relative,
+    health,
+    stats.n
+  )
+  return msg .. " take<=" .. stats.take .. " put<=" .. stats.put
+end
+
+local function clearAndPrintStats()
+  if cycle % clearEvery ~= 0 then
+    return
+  end
+  term.clear()
+  term.setCursor(1, 1)
+  print(statsLine("total", totalStats))
+  print(statsLine("8h", windowStats()))
 end
 
 local function call(addr, method, ...)
@@ -479,13 +585,11 @@ local function printCycle(data)
   end
   local width = math.max(8, #tostring(threshold) + 2)
   local deltaWidth = math.max(6, width - 2)
-  local average = totalInput > 0 and totalGain / totalInput or 0
-  local msg = "[cyc] #" .. pad(cycle, 4)
+  local msg = "[cyc] #" .. pad(cycle, 7)
   msg = msg .. " " .. pad(data.sum, width)
   msg = msg .. " - " .. pad(data.remove, width)
   msg = msg .. " = " .. pad(data.keep, width)
   msg = msg .. ", inc=" .. pad(data.gain, deltaWidth)
-  msg = msg .. string.format(", ave=%6.2f%%", average * 100)
   msg = msg .. ", take " .. data.takeStart .. "-" .. data.takeEnd
   msg = msg .. " | put " .. data.putStart .. "-" .. data.putEnd
   print(msg)
@@ -533,6 +637,7 @@ local function runCycle(first)
     return true
   end
   local takeEnd = progress()
+  clearAndPrintStats()
 
   local putStart, hit = waitProgressAtLeast(putProgress)
   if not putStart or not hit then
@@ -550,8 +655,7 @@ local function runCycle(first)
 
   local gain = lastKeep and sum - lastKeep or 0
   if lastKeep then
-    totalGain = totalGain + gain
-    totalInput = totalInput + lastKeep
+    recordStats(gain, takeEnd, putEnd)
   end
   printCycle({
     sum = sum,
@@ -571,6 +675,7 @@ end
 local function main()
   detectMachines()
   detectFluidSides()
+  clearAndPrintStats()
   print("[init] threshold=" .. tostring(threshold))
   local timing = "[init] take>=" .. takeProgress
   timing = timing .. ", put_tick=" .. putTick
