@@ -35,8 +35,9 @@ local inputFluidStartMin = math.sqrt(threshold) * 300
 -- Missing a return only idles the forge; missing a pull before the next tick 1 can lose a lot.
 local takeProgressMin = 2
 local machineCycleTicks = 20
-local tickSafeReturn = 4
-local putProgressMin = machineCycleTicks - tickSafeReturn
+-- getWorkProgress is one ahead of the displayed machine tick.
+local putTick = 16
+local putProgressMin = putTick + 1
 
 -- Print every N cycles.
 local printEvery = 1
@@ -52,6 +53,9 @@ local stopWaitTimeout = 3
 
 -- Wait before retrying after input fluid shortage.
 local inputLowRetryDelay = 300
+
+-- Wait between transfer retries while the forge is safely stopped.
+local transferRetryDelay = 1
 
 -- Yield every N tight-loop iterations.
 local yieldEvery = 80
@@ -452,6 +456,7 @@ local function initGtMachines()
   end
 
   requireMethod(gtmMachine, "setWorkAllowed", "antimatterForge")
+  requireMethod(gtmMachine, "isWorkAllowed", "antimatterForge")
   requireMethod(gtmMachine, "getWorkProgress", "antimatterForge")
   requireMethod(gtmTank, "setWorkAllowed", "tank")
 
@@ -468,6 +473,10 @@ end
 
 local function setTankAllowed(value)
   invoke(gtmTank, "setWorkAllowed", value)
+end
+
+local function isMachineAllowed()
+  return not not invoke(gtmMachine, "isWorkAllowed")
 end
 
 local function progress()
@@ -542,6 +551,29 @@ local function waitCurrentCycleEnd(timeout)
   end
 
   return true
+end
+
+local function stopMachineAndConfirm()
+  local stoppedSamples = 0
+
+  while true do
+    -- Reassert the stop command in case another controller changed the state.
+    setMachineAllowed(false)
+
+    local allowed = isMachineAllowed()
+    local p = progress()
+    if not allowed and p == 0 then
+      stoppedSamples = stoppedSamples + 1
+      if stoppedSamples >= 2 then
+        print("[recover] forge stop confirmed allowed=false progress=0")
+        return
+      end
+    else
+      stoppedSamples = 0
+    end
+
+    os.sleep(0.05)
+  end
 end
 
 local function safeStop()
@@ -659,23 +691,98 @@ local function waitMachineStart()
   return nil
 end
 
-local function transferExcess(sum)
+local function tryTransferExcess(sum)
   local keep, remove = keepRemove(sum)
 
   if remove > 0 then
-    local ok, result = pcall(trans.transferFluid, sideTank, sideOutput, remove)
-    if not ok or result == false then
-      print(
-        "[bad] transfer failed remove=" ..
-        tostring(remove) ..
-        " result=" ..
-        tostring(result)
-      )
-      error("transferFluid failed")
+    local ok, result, moved = pcall(trans.transferFluid, sideTank, sideOutput, remove)
+    local remaining = tankLevel()
+
+    if not ok or result == false or remaining > keep then
+      return false, keep, remove, result, moved, remaining
     end
   end
 
-  return keep, remove
+  return true, keep, remove
+end
+
+local function recoverTransfer()
+  print("[recover] transfer failed; stopping forge")
+  stopMachineAndConfirm()
+
+  -- Keep the tank disabled so all antimatter flows back into it.
+  setTankAllowed(false)
+
+  local sum, got = waitTankNonZero(nil)
+  if not got then
+    stopReason = "control off during transfer recovery"
+    return nil, nil, false
+  end
+
+  print("[recover] forge stopped; antimatter returned to tank amount=" .. tostring(sum))
+
+  while true do
+    sum = tankLevel()
+    local ok, keep, remove, result, moved, remaining = tryTransferExcess(sum)
+    if ok then
+      print(
+        "[recover] transfer succeeded sum=" ..
+        tostring(sum) ..
+        " remove=" ..
+        tostring(remove) ..
+        " keep=" ..
+        tostring(keep)
+      )
+
+      if not controlOn() then
+        stopReason = "control off after transfer recovery"
+        return keep, remove, false
+      end
+
+      -- Re-prime from the safe stopped state, then resume with a fresh cycle.
+      setTankAllowed(true)
+      if not waitTankEmpty() then
+        stopReason = "control off while restarting after transfer recovery"
+        return keep, remove, false
+      end
+      setMachineAllowed(true)
+      print("[recover] forge restarted; returning to normal cycle")
+      return keep, remove, true
+    end
+
+    print(
+      "[recover] transfer retry remove=" ..
+      tostring(remove) ..
+      " result=" ..
+      tostring(result) ..
+      " moved=" ..
+      tostring(moved) ..
+      " tank=" ..
+      tostring(remaining)
+    )
+    os.sleep(transferRetryDelay)
+  end
+end
+
+local function transferExcess(sum)
+  local ok, keep, remove, result, moved, remaining = tryTransferExcess(sum)
+  if ok then
+    return keep, remove, false, true
+  end
+
+  print(
+    "[bad] transfer failed remove=" ..
+    tostring(remove) ..
+    " result=" ..
+    tostring(result) ..
+    " moved=" ..
+    tostring(moved) ..
+    " tank=" ..
+    tostring(remaining)
+  )
+
+  local recoveredKeep, recoveredRemove, restarted = recoverTransfer()
+  return recoveredKeep, recoveredRemove, true, restarted
 end
 
 local function printTankWaitFailure()
@@ -720,33 +827,38 @@ local function runOneBalance(firstCycleThisRun)
       return false
     end
 
-    local keep, remove = transferExcess(sum)
-
-    putStartProgress = progress()
-    if putStartProgress >= takeProgressMin and putStartProgress < putProgressMin then
-      local hitPutWindow = false
-      putStartProgress, hitPutWindow = waitProgressAtLeastBeforeCycleEnd(putProgressMin)
-      if putStartProgress == nil then
-        stopReason = "control off before initial put window"
-        return false
-      end
-      if not hitPutWindow then
-        setMachineAllowed(false)
-        stopReason = "missed initial put window"
-        return false
-      end
-    end
-
-    setTankAllowed(true)
-
-    local emptied = waitTankEmpty()
-    putEndProgress = progress()
-    if not emptied then
-      stopReason = "control off while priming tank"
+    local keep, remove, recovered, restarted = transferExcess(sum)
+    if keep == nil or (recovered and not restarted) then
       return false
     end
 
-    setMachineAllowed(true)
+    if not recovered then
+      putStartProgress = progress()
+      if putStartProgress >= takeProgressMin and putStartProgress < putProgressMin then
+        local hitPutWindow = false
+        putStartProgress, hitPutWindow = waitProgressAtLeastBeforeCycleEnd(putProgressMin)
+        if putStartProgress == nil then
+          stopReason = "control off before initial put window"
+          return false
+        end
+        if not hitPutWindow then
+          setMachineAllowed(false)
+          stopReason = "missed initial put window"
+          return false
+        end
+      end
+
+      setTankAllowed(true)
+
+      local emptied = waitTankEmpty()
+      putEndProgress = progress()
+      if not emptied then
+        stopReason = "control off while priming tank"
+        return false
+      end
+
+      setMachineAllowed(true)
+    end
 
     lastKeep = keep
   else
@@ -790,7 +902,15 @@ local function runOneBalance(firstCycleThisRun)
     return false
   end
 
-  local keep, remove = transferExcess(sum)
+  local keep, remove, recovered, restarted = transferExcess(sum)
+  if keep == nil or (recovered and not restarted) then
+    return false
+  end
+  if recovered then
+    lastKeep = keep
+    stopReason = "ok"
+    return true
+  end
   takeEndProgress = progress()
 
   local inputOk = checkInputFluids(inputFluidStopMin, "stop")
@@ -880,10 +1000,12 @@ local function main()
   print(
     "[init] take>=" ..
     tostring(takeProgressMin) ..
-    ", put>=" ..
+    ", put_tick=" ..
+    tostring(putTick) ..
+    ", put_progress>=" ..
     tostring(putProgressMin) ..
     ", tick_safe_return=" ..
-    tostring(tickSafeReturn)
+    tostring(machineCycleTicks - putProgressMin)
   )
   print("[init] input fluids=" .. tostring(#inputFluids))
   print("[init] waiting for 2 redstone input sides")
