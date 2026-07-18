@@ -312,7 +312,10 @@ local function detectMachines()
     "isWorkAllowed",
     "getWorkProgress",
   })
-  requireMethods(tank, "tank", {"setWorkAllowed"})
+  requireMethods(tank, "tank", {
+    "setWorkAllowed",
+    "isWorkAllowed",
+  })
   print("[init] forge=" .. tostring(forge))
   print("[init] tank=" .. tostring(call(tank, "getName")))
 end
@@ -323,6 +326,10 @@ end
 
 local function setTank(value)
   call(tank, "setWorkAllowed", value)
+end
+
+local function tankAllowed()
+  return not not call(tank, "isWorkAllowed")
 end
 
 local function forgeAllowed()
@@ -384,16 +391,39 @@ end
 
 local function confirmForgeStopped()
   local samples = 0
+  local lastLog = 0
   while samples < 2 do
     setForge(false)
-    if not forgeAllowed() and progress() == 0 then
+    local allowed = forgeAllowed()
+    local value = progress()
+    if not allowed and value == 0 then
+      samples = samples + 1
+    else
+      samples = 0
+    end
+    local now = computer.uptime()
+    if now - lastLog >= 1 and samples == 0 then
+      local msg = "[stop] waiting forge allowed="
+      print(msg .. tostring(allowed) .. " progress=" .. value)
+      lastLog = now
+    end
+    os.sleep(0.05)
+  end
+  print("[recover] forge stop confirmed")
+end
+
+local function confirmTankStopped()
+  local samples = 0
+  while samples < 2 do
+    setTank(false)
+    if not tankAllowed() then
       samples = samples + 1
     else
       samples = 0
     end
     os.sleep(0.05)
   end
-  print("[recover] forge stop confirmed")
+  print("[recover] tank reflux mode confirmed")
 end
 
 local function waitTankPositive(timeout)
@@ -484,7 +514,7 @@ end
 local function recoverTransfer()
   print("[recover] transfer failed; stopping forge")
   confirmForgeStopped()
-  setTank(false)
+  confirmTankStopped()
 
   local sum = waitTankPositive(nil)
   if not sum then
@@ -539,12 +569,15 @@ local function failTankWait()
   print("[bad] timeout/control off waiting for tank")
   print("[bad] side=" .. sideName(tankSide))
   print("[bad] level=" .. tostring(tankLevel()))
+  print("[bad] forge allowed=" .. tostring(forgeAllowed()))
+  print("[bad] forge progress=" .. tostring(progress()))
+  print("[bad] tank allowed=" .. tostring(tankAllowed()))
   stopReason = "tank wait failed"
 end
 
 local function primeFirstCycle()
-  setForge(false)
-  setTank(false)
+  confirmForgeStopped()
+  confirmTankStopped()
   local sum = waitTankPositive(tankWaitTimeout)
   if not sum then
     failTankWait()
