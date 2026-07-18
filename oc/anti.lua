@@ -20,17 +20,6 @@ local sideOutput = nil
 
 local threshold = 7615776  -- best for Sh
 
-local inputFluids = {
-  "temporalfluid",
-  "molten.eternity",
-  "molten.shirabon",
-  "naquadah based liquid fuel mkvi (depleted)",
-  "protomatter",
-}
-
-local inputFluidStopMin = math.sqrt(threshold) * 10
-local inputFluidStartMin = math.sqrt(threshold) * 300
-
 -- The forge changes antimatter on tick 1. Pull after that, return before the next tick 1.
 -- Missing a return only idles the forge; missing a pull before the next tick 1 can lose a lot.
 local takeProgressMin = 2
@@ -51,9 +40,6 @@ local tankWaitTimeout = 5
 -- Max wait before pulling tank during stop.
 local stopWaitTimeout = 3
 
--- Wait before retrying after input fluid shortage.
-local inputLowRetryDelay = 300
-
 -- Wait between transfer retries while the forge is safely stopped.
 local transferRetryDelay = 1
 
@@ -70,8 +56,6 @@ local controlSides = nil
 
 local gtmMachine = nil
 local gtmTank = nil
-local meInterface = nil
-local nextInputOk = nil
 local stopReason = "unknown"
 
 local sideNames = {
@@ -136,75 +120,6 @@ local function requireMethod(addr, name, label)
   if not hasMethod(addr, name) then
     error(label .. " missing method: " .. name)
   end
-end
-
-local function initMeInterface()
-  if not component.isAvailable("me_interface") then
-    error("no me_interface component")
-  end
-
-  local candidates = {}
-
-  for addr in component.list("me_interface", true) do
-    local methods = component.methods(addr)
-    table.insert(candidates, { address = addr, methods = methods })
-
-    if methods ~= nil and methods.getFluidsInNetwork ~= nil then
-      meInterface = component.proxy(addr)
-      -- print("[init] me_interface=" .. tostring(addr))
-      print("[init] input fluid stop min=" .. string.format("%.2f", inputFluidStopMin))
-      print("[init] input fluid start min=" .. string.format("%.2f", inputFluidStartMin))
-      return
-    end
-  end
-
-  print("[fatal] no me_interface with getFluidsInNetwork")
-  for i, item in ipairs(candidates) do
-    print("  [" .. tostring(i) .. "] " .. tostring(item.address))
-    if item.methods ~= nil then
-      for name in pairs(item.methods) do
-        print("    method=" .. tostring(name))
-      end
-    end
-  end
-
-  error("me_interface missing method: getFluidsInNetwork")
-end
-
-local function getNetworkFluidAmounts()
-  local fluids = meInterface.getFluidsInNetwork()
-  local amounts = {}
-
-  for _, fluid in ipairs(fluids) do
-    if fluid.name ~= nil then
-      amounts[fluid.name] = tonumber(fluid.amount) or 0
-    end
-  end
-
-  return amounts
-end
-
-local function checkInputFluids(minAmount, reason)
-  local amounts = getNetworkFluidAmounts()
-
-  for _, fluidName in ipairs(inputFluids) do
-    local amount = amounts[fluidName] or 0
-    if amount <= minAmount then
-      print(
-        "[bad] input fluid low " ..
-        tostring(reason) ..
-        ": " ..
-        fluidName ..
-        " amount=" ..
-        tostring(amount) ..
-        " need>" ..
-        string.format("%.2f", minAmount)
-      )
-      return false
-    end
-  end
-
-  return true
 end
 
 local function getTankInfoSafe(side)
@@ -540,19 +455,6 @@ local function forceStopAll()
   pcall(setTankAllowed, false)
 end
 
-local function waitCurrentCycleEnd(timeout)
-  local startTime = computer.uptime()
-
-  while progress() >= takeProgressMin do
-    if timeout ~= nil and computer.uptime() - startTime > timeout then
-      return false
-    end
-    os.sleep(0.05)
-  end
-
-  return true
-end
-
 local function stopMachineAndConfirm()
   local stoppedSamples = 0
 
@@ -799,18 +701,6 @@ local function printTankWaitFailure()
 end
 
 local function runOneBalance(firstCycleThisRun)
-  if nextInputOk == nil then
-    nextInputOk = checkInputFluids(inputFluidStartMin, "start")
-  end
-
-  if not nextInputOk then
-    nextInputOk = nil
-    stopReason = "input fluid low"
-    return false
-  end
-
-  nextInputOk = nil
-
   local putStartProgress = nil
   local putEndProgress = nil
   local takeStartProgress = nil
@@ -913,19 +803,6 @@ local function runOneBalance(firstCycleThisRun)
   end
   takeEndProgress = progress()
 
-  local inputOk = checkInputFluids(inputFluidStopMin, "stop")
-  nextInputOk = inputOk
-
-  if not inputOk then
-    setMachineAllowed(false)
-    local ended = waitCurrentCycleEnd(stopWaitTimeout)
-    if not ended then
-      print("[warn] timeout waiting current cycle after input shortage")
-    end
-    stopReason = "input fluid low"
-    return false
-  end
-
   local hitPutWindow = false
   putStartProgress, hitPutWindow = waitProgressAtLeastBeforeCycleEnd(putProgressMin)
   if putStartProgress == nil then
@@ -992,7 +869,6 @@ local function runOneBalance(firstCycleThisRun)
 end
 
 local function main()
-  initMeInterface()
   initGtMachines()
   initSides()
 
@@ -1007,7 +883,6 @@ local function main()
     ", tick_safe_return=" ..
     tostring(machineCycleTicks - putProgressMin)
   )
-  print("[init] input fluids=" .. tostring(#inputFluids))
   print("[init] waiting for 2 redstone input sides")
 
   while true do
@@ -1027,12 +902,7 @@ local function main()
 
       print("[stop] " .. stopReason)
       safeStop()
-      if stopReason == "input fluid low" then
-        print("[wait] input fluid low, retry in " .. tostring(inputLowRetryDelay) .. " sec")
-        os.sleep(inputLowRetryDelay)
-      else
-        os.sleep(1)
-      end
+      os.sleep(1)
     else
       safeStop()
       os.sleep(1)
