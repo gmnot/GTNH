@@ -25,12 +25,14 @@ local threshold = 40160576
 local e_yield = 10957.7
 local sigma_yield = 9124.7
 
-local takeProgress = 2
+local takeTick = 1
 local cycleTicks = 20
-local putTick = 16
+local putTick = 14
 local putProgress = putTick + 1
 local abnormalLoss = threshold / 300
-local tankWaitTimeout = 5
+local tickSeconds = 0.05
+local transferPerTick = 16777216
+local tankTransferTicks = math.ceil(threshold / transferPerTick)
 local stopWaitTimeout = 3
 local transferRetryDelay = 1
 local printEvery = 1
@@ -429,29 +431,22 @@ local function confirmTankStopped()
   print("[recover] tank reflux mode confirmed")
 end
 
-local function waitTankPositive(timeout)
-  local started = computer.uptime()
-  while controlsOn() do
-    local amount = tankLevel()
-    if amount > 0 then
-      return amount
-    end
-    if timeout and computer.uptime() - started > timeout then
-      return nil
-    end
-    os.sleep(0)
+local function readTankAfterReflux()
+  os.sleep(tankTransferTicks * tickSeconds)
+  if not controlsOn() then
+    return nil
+  end
+
+  local amount = tankLevel()
+  if amount > 0 then
+    return amount
   end
   return nil
 end
 
-local function waitTankEmpty()
-  while controlsOn() do
-    if tankLevel() == 0 then
-      return true
-    end
-    os.sleep(0)
-  end
-  return false
+local function tankEmptyAfterTransfer()
+  os.sleep(tankTransferTicks * tickSeconds)
+  return controlsOn() and tankLevel() == 0
 end
 
 local function waitProgressAtLeast(target)
@@ -460,7 +455,7 @@ local function waitProgressAtLeast(target)
     if value >= target then
       return value, true
     end
-    if value < takeProgress then
+    if value < takeTick then
       return value, false
     end
     os.sleep(0)
@@ -482,7 +477,7 @@ end
 local function waitForgeStart()
   while controlsOn() do
     local value = progress()
-    if value >= takeProgress then
+    if value >= takeTick then
       return value
     end
     os.sleep(0)
@@ -519,7 +514,7 @@ local function recoverTransfer()
   confirmForgeStopped()
   confirmTankStopped()
 
-  local sum = waitTankPositive(nil)
+  local sum = readTankAfterReflux()
   if not sum then
     stopReason = "control off during transfer recovery"
     return nil, nil, false
@@ -537,7 +532,7 @@ local function recoverTransfer()
         return keep, remove, false
       end
       setTank(true)
-      if not waitTankEmpty() then
+      if not tankEmptyAfterTransfer() then
         stopReason = "control off during recovery restart"
         return keep, remove, false
       end
@@ -581,7 +576,7 @@ end
 local function primeFirstCycle()
   confirmForgeStopped()
   confirmTankStopped()
-  local sum = waitTankPositive(tankWaitTimeout)
+  local sum = readTankAfterReflux()
   if not sum then
     failTankWait()
     return nil
@@ -596,7 +591,7 @@ local function primeFirstCycle()
   end
 
   local start = progress()
-  if start >= takeProgress and start < putProgress then
+  if start >= takeTick and start < putProgress then
     local hit
     start, hit = waitProgressAtLeast(putProgress)
     if not start or not hit then
@@ -607,7 +602,7 @@ local function primeFirstCycle()
   end
 
   setTank(true)
-  if not waitTankEmpty() then
+  if not tankEmptyAfterTransfer() then
     stopReason = "control off while priming tank"
     return nil
   end
@@ -637,7 +632,7 @@ local function runCycle(first)
     if not lastKeep then
       return false
     end
-  elseif not waitProgressBelow(takeProgress) then
+  elseif not waitProgressBelow(takeTick) then
     stopReason = "control off before next cycle"
     return false
   end
@@ -650,7 +645,7 @@ local function runCycle(first)
   cycle = cycle + 1
   setTank(false)
 
-  local sum = waitTankPositive(nil)
+  local sum = readTankAfterReflux()
   if not sum then
     failTankWait()
     return false
@@ -682,7 +677,7 @@ local function runCycle(first)
     return false
   end
   setTank(true)
-  local emptied = waitTankEmpty()
+  local emptied = tankEmptyAfterTransfer()
   local putEnd = progress()
   if not emptied then
     stopReason = "control off while emptying tank"
@@ -713,10 +708,11 @@ local function main()
   detectFluidSides()
   clearAndPrintStats()
   print("[init] threshold=" .. tostring(threshold))
-  local timing = "[init] take>=" .. takeProgress
+  local timing = "[init] take>=" .. takeTick
   timing = timing .. ", put_tick=" .. putTick
   timing = timing .. ", put_progress>=" .. putProgress
   timing = timing .. ", safe_ticks=" .. cycleTicks - putProgress
+  timing = timing .. ", transfer_ticks=" .. tankTransferTicks
   print(timing)
   print("[init] waiting for two redstone inputs")
 
