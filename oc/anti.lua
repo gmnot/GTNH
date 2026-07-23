@@ -18,9 +18,12 @@ local rs = component.redstone
 local tankSide = nil
 local outputSide = nil
 
-local threshold = 8014224
-local e_yield = 1888.4
-local sigma_yield = 1567.0
+-- local threshold = 8014224
+-- local e_yield = 1888.4
+-- local sigma_yield = 1567.0
+local threshold = 40160576
+local e_yield = 10957.7
+local sigma_yield = 9124.7
 
 local takeProgress = 2
 local cycleTicks = 20

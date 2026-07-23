@@ -11,20 +11,53 @@ local outputSide = sides.north
 local outputStrength = 15
 local checkInterval = 3
 
-local threshold = 7615776  -- keep in sync with anti.lua
-
+-- keep in sync with anti.lua
+-- local threshold = 8015776   -- eternity
+local threshold = 40160576  -- blue
 local inputFluids = {
   "temporalfluid",
   "molten.eternity",
   "molten.shirabon",
   "naquadah based liquid fuel mkvi (depleted)",
   "protomatter",
+  "molten.magnetohydrodynamicallyconstrainedstarmatter",
 }
 
-local n_machine = 2
-local n_per_sec = n_machine * math.sqrt(threshold)
-local inputFluidStopMin = n_per_sec * 10
-local inputFluidStartMin = n_per_sec * 300
+local fluidShortNames = {
+  ["temporalfluid"] = "Time",
+  ["molten.eternity"] = "Eter",
+  ["molten.shirabon"] = "Shira",
+  ["naquadah based liquid fuel mkvi (depleted)"] = "NqVI-D",
+  ["protomatter"] = "Proto",
+  ["molten.magnetohydrodynamicallyconstrainedstarmatter"] = "blue",
+}
+
+local n_machine = 6
+
+-- Fluid use per machine and operation, as shown in the recipe:
+-- antimatter_amount ^ exponent (L). One operation runs per second.
+local fluidExponents = {
+  ["temporalfluid"] = 1 / 2,
+  ["molten.eternity"] = 1 / 2,
+  ["molten.shirabon"] = 2 / 7,
+  ["naquadah based liquid fuel mkvi (depleted)"] = 1 / 3,
+  ["protomatter"] = 1 / 2,
+  ["molten.magnetohydrodynamicallyconstrainedstarmatter"] = 2 / 7,
+}
+
+local function fluidMinimumsFor(seconds)
+  local minimums = {}
+  for _, fluidName in ipairs(inputFluids) do
+    local exponent = fluidExponents[fluidName]
+    minimums[fluidName] = n_machine
+      * threshold ^ exponent
+      * seconds
+  end
+  return minimums
+end
+
+local inputFluidStopMins = fluidMinimumsFor(30)
+local inputFluidStartMins = fluidMinimumsFor(300)
 
 local rs = component.redstone
 local meInterface = nil
@@ -74,8 +107,9 @@ local function getNetworkFluidAmounts()
   return amounts
 end
 
-local function allInputsAbove(amounts, minAmount)
+local function allInputsAbove(amounts, minimums)
   for _, fluidName in ipairs(inputFluids) do
+    local minAmount = minimums[fluidName]
     if (amounts[fluidName] or 0) <= minAmount then
       return false, fluidName, amounts[fluidName] or 0
     end
@@ -84,17 +118,47 @@ local function allInputsAbove(amounts, minAmount)
   return true
 end
 
-local function printAmounts(amounts)
+local function formatAmount(value)
+  local number = tonumber(value) or 0
+  for _, unit in ipairs({ { "t", 1e12 }, { "g", 1e9 }, { "m", 1e6 }, { "k", 1e3 } }) do
+    if math.abs(number) >= unit[2] then
+      return string.format("%.0f%s", number / unit[2], unit[1])
+    end
+  end
+  return tostring(math.floor(number))
+end
+
+local function padRight(value, width)
+  local text = tostring(value)
+  return text .. string.rep(" ", math.max(0, width - #text))
+end
+
+local function shortFluidName(fluidName)
+  return fluidShortNames[fluidName] or fluidName
+end
+
+local function printAmounts(amounts, targetAmounts)
   local values = {}
+  local nameWidth = 0
+  local amountWidth = 0
+  local targetWidth = 0
 
   for _, fluidName in ipairs(inputFluids) do
-    table.insert(
-      values,
-      fluidName .. "=" .. tostring(amounts[fluidName] or 0)
-    )
+    nameWidth = math.max(nameWidth, #shortFluidName(fluidName))
+    amountWidth = math.max(amountWidth, #formatAmount(amounts[fluidName] or 0))
+    targetWidth = math.max(targetWidth, #formatAmount(targetAmounts[fluidName]))
   end
 
-  print("[check] " .. table.concat(values, ", "))
+  for _, fluidName in ipairs(inputFluids) do
+    local name = padRight(shortFluidName(fluidName), nameWidth)
+    local current = formatAmount(amounts[fluidName] or 0)
+    local targetText = formatAmount(targetAmounts[fluidName])
+    current = string.rep(" ", amountWidth - #current) .. current
+    targetText = string.rep(" ", targetWidth - #targetText) .. targetText
+    table.insert(values, name .. " " .. current .. "/" .. targetText)
+  end
+
+  print("[check] " .. table.concat(values, " || "))
 end
 
 local function setOutput(enabled)
@@ -112,9 +176,9 @@ local function printState(statusKey, enabled, reason, fluidName, amount, minAmou
 
   if fluidName ~= nil then
     message = message ..
-      " fluid=" .. tostring(fluidName) ..
-      " amount=" .. tostring(amount) ..
-      " need>" .. string.format("%.2f", minAmount)
+      " fluid=" .. shortFluidName(fluidName) ..
+      " amount=" .. formatAmount(amount) ..
+      "/" .. formatAmount(minAmount)
   end
 
   print(message)
@@ -125,8 +189,8 @@ local function main()
   initMeInterface()
 
   print("[init] output side=" .. sideName(outputSide))
-  print("[init] stop min=" .. string.format("%.2f", inputFluidStopMin))
-  print("[init] start min=" .. string.format("%.2f", inputFluidStartMin))
+  print("[init] stop mins cover 10 seconds of recipe consumption")
+  print("[init] start mins cover 300 seconds of recipe consumption")
   print("[init] output starts off; all inputs must reach start min")
 
   local enabled = false
@@ -141,18 +205,19 @@ local function main()
       end
       printState("read failed", false, "network read failed: " .. tostring(amounts))
     else
-      printAmounts(amounts)
+      local targetAmounts = enabled and inputFluidStopMins or inputFluidStartMins
+      printAmounts(amounts, targetAmounts)
     end
 
     if readOk and enabled then
-      local enough, fluidName, amount = allInputsAbove(amounts, inputFluidStopMin)
+      local enough, fluidName, amount = allInputsAbove(amounts, inputFluidStopMins)
       if not enough then
         enabled = false
         setOutput(false)
-        printState("stop:" .. fluidName, false, "stop min", fluidName, amount, inputFluidStopMin)
+        printState("stop:" .. fluidName, false, "stop min", fluidName, amount, inputFluidStopMins[fluidName])
       end
     elseif readOk then
-      local enough, fluidName, amount = allInputsAbove(amounts, inputFluidStartMin)
+      local enough, fluidName, amount = allInputsAbove(amounts, inputFluidStartMins)
       if enough then
         enabled = true
         setOutput(true)
@@ -164,7 +229,7 @@ local function main()
           "waiting for start min",
           fluidName,
           amount,
-          inputFluidStartMin
+          inputFluidStartMins[fluidName]
         )
       end
     end
