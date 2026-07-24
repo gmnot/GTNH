@@ -509,7 +509,7 @@ local function processFluid(demands)
                     cacheTable[i] = demand.remaining
                     if not saveTask() then error("cannot persist transfer progress") end
                 end
-                os.sleep(0.35)
+                os.sleep(0.1)
             end
         end
     end
