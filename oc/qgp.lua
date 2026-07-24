@@ -1,8 +1,6 @@
 local os = require("os")
 local component = require("component")
 local sides = require("sides")
-local filesystem = require("filesystem")
-local serialization = require("serialization")
 
 local trans = component.transposer
 local sideCacheBuffer = sides.down
@@ -17,9 +15,6 @@ local cacheTable = {}
 local cacheSourceTable = {}
 local demandTable = {}
 
-local statePath = "/home/qgp.state"
-local stateBackupPath = statePath .. ".bak"
-local stateTempPath = statePath .. ".tmp"
 local activeTask = nil
 local orphanPlasmaWarned = false
 
@@ -65,79 +60,8 @@ local function tankFluid(side, tank)
     return fluid
 end
 
-local function writeStateFile(path, value)
-    local file, err = io.open(path, "w")
-    if file == nil then return false, err end
-    local ok, serialized = pcall(serialization.serialize, value)
-    if not ok then
-        file:close()
-        return false, serialized
-    end
-    local wrote, writeErr = file:write(serialized)
-    file:close()
-    if wrote == nil then return false, writeErr end
-    return true
-end
-
-local function saveTask()
-    if activeTask == nil then return true end
-    activeTask.updatedAt = os.time()
-    local ok, err = writeStateFile(stateTempPath, activeTask)
-    if not ok then
-        print("[state] cannot write journal: " .. tostring(err))
-        return false
-    end
-
-    if filesystem.exists(statePath) then
-        if filesystem.exists(stateBackupPath) then filesystem.remove(stateBackupPath) end
-        local backedUp, backupErr = filesystem.rename(statePath, stateBackupPath)
-        if not backedUp then
-            print("[state] cannot rotate journal: " .. tostring(backupErr))
-            return false
-        end
-    end
-    local renamed, renameErr = filesystem.rename(stateTempPath, statePath)
-    if not renamed then
-        print("[state] cannot commit journal: " .. tostring(renameErr))
-        return false
-    end
-    return true
-end
-
-local function readStateFile(path)
-    local file = io.open(path, "r")
-    if file == nil then return nil end
-    local contents = file:read("*a")
-    file:close()
-    local ok, value = pcall(serialization.unserialize, contents)
-    if not ok or type(value) ~= "table" or value.version ~= 1 or type(value.demands) ~= "table" then
-        return nil
-    end
-    if value.phase ~= "prepared" and value.phase ~= "transferring" and value.phase ~= "waiting" and value.phase ~= "cleanup" then
-        return nil
-    end
-    for _, demand in ipairs(value.demands) do
-        if type(demand.amount) ~= "number" or type(demand.remaining) ~= "number" or
-           type(demand.fluidName) ~= "string" or type(demand.dbName) ~= "string" then
-            return nil
-        end
-    end
-    return value
-end
-
-local function loadTask()
-    local task = readStateFile(statePath)
-    if task ~= nil then return task end
-    task = readStateFile(stateBackupPath)
-    if task ~= nil then print("[state] primary journal invalid; recovered backup") end
-    return task
-end
-
 local function clearTask()
     activeTask = nil
-    if filesystem.exists(statePath) then filesystem.remove(statePath) end
-    if filesystem.exists(stateBackupPath) then filesystem.remove(stateBackupPath) end
-    if filesystem.exists(stateTempPath) then filesystem.remove(stateTempPath) end
 end
 
 local function normalizeMaterialName(materialName)
@@ -437,18 +361,20 @@ local function reconcileProgress(demands)
 end
 
 local function setInterfaceFluid(index, expectedFluidName)
-    mei.setFluidInterfaceConfiguration(0)
-    os.sleep(0.5)
+    while not mei.setFluidInterfaceConfiguration(0) do
+        print("[transfer] failed to clear interface marker; retrying")
+        os.sleep(0.05)
+    end
 
     local waited = 0
     local fluid = tankFluid(sideInterface, 1)
-    while fluid ~= nil and fluid.name ~= expectedFluidName do
+    while fluid ~= nil do
         if waited == 0 then
             print("[transfer] draining stale interface fluid: " .. tostring(fluid.name))
         end
-        os.sleep(0.5)
-        waited = waited + 0.5
-        if waited >= 10 then
+        os.sleep(0.05)
+        waited = waited + 0.05
+        if waited >= 2 then
             print("[transfer] stale interface fluid did not drain; retrying filter reset")
             mei.setFluidInterfaceConfiguration(0)
             waited = 0
@@ -456,13 +382,14 @@ local function setInterfaceFluid(index, expectedFluidName)
         fluid = tankFluid(sideInterface, 1)
     end
 
-    mei.setFluidInterfaceConfiguration(0, database.address, index)
-    os.sleep(0.5)
+    while not mei.setFluidInterfaceConfiguration(0, database.address, index) do
+        print("[transfer] failed to set target marker; retrying " .. expectedFluidName)
+        os.sleep(0.05)
+    end
 end
 
 local function processFluid(demands)
     reconcileProgress(demands)
-    if not saveTask() then error("cannot persist reconciled progress") end
 
     for i, demand in ipairs(demands) do
         if demand.remaining > 0 then
@@ -507,9 +434,9 @@ local function processFluid(demands)
                 if moved > 0 then
                     demand.remaining = demand.remaining - moved
                     cacheTable[i] = demand.remaining
-                    if not saveTask() then error("cannot persist transfer progress") end
+                else
+                    os.sleep(0.05)
                 end
-                os.sleep(0.1)
             end
         end
     end
@@ -556,7 +483,7 @@ local function waitForMachineStart(demands)
         os.sleep(0.5)
         timeout = timeout + 0.5
         if timeout >= maxWait then
-            print("machine start timeout; journal retained, will keep waiting")
+            print("machine start timeout; in-memory task retained, will keep waiting")
             return false
         end
     end
@@ -579,40 +506,32 @@ local function runActiveTask()
     for i, demand in ipairs(demands) do cacheTable[i] = demand.remaining end
 
     if activeTask.phase == "prepared" then
-        print("[state] demand journal ready; moving original inputs")
+        print("[state] demand state ready; moving original inputs")
         if not clearCacheBuffer() then return end
         activeTask.phase = "transferring"
-        if not saveTask() then error("cannot persist task phase") end
     end
 
     if activeTask.phase == "transferring" then
         print("[state] transferring plasma (restart-safe)")
         processFluid(demands)
         activeTask.phase = "waiting"
-        if not saveTask() then error("cannot persist task phase") end
     end
 
     if activeTask.phase == "waiting" then
         if waitForMachineStart(demands) then
             activeTask.phase = "cleanup"
-            if not saveTask() then error("cannot persist task phase") end
         end
     end
 
     if activeTask.phase == "cleanup" then
         if clearResidualPlasma() then
             clearTask()
-            print("[state] task journal cleared")
+            print("[state] task state cleared")
         end
     end
 end
 
 local function main()
-    activeTask = loadTask()
-    if activeTask ~= nil then
-        print(string.format("[state] recovering interrupted task, phase=%s", tostring(activeTask.phase)))
-    end
-
     while true do
         if activeTask ~= nil then
             runActiveTask()
@@ -636,18 +555,13 @@ local function main()
                         phase = "prepared",
                         demands = demandTable,
                     }
-                    if saveTask() then
-                        print("[state] saved all 7 fluid demands before removing inputs")
-                        runActiveTask()
-                    else
-                        activeTask = nil
-                        print("[state] input not moved because journal could not be saved")
-                    end
+                    print("[state] saved all 7 fluid demands in Lua state before removing inputs")
+                    runActiveTask()
                 else
                     print("[scan bad] input not moved; fix mapping/input and rerun")
                 end
             elseif fluid ~= nil and tostring(fluid.name or ""):match("^plasma%.") and not orphanPlasmaWarned then
-                print("[state] orphan plasma found without a journal; this old interrupted batch cannot be reconstructed automatically")
+                print("[state] orphan plasma found without an active task; this old interrupted batch cannot be reconstructed automatically")
                 print("[state] clear the malformed cache once, then new batches will be restart-safe")
                 orphanPlasmaWarned = true
             end
