@@ -10,7 +10,7 @@ local seedSlot = 1                   -- 黑洞种子的槽位
 local collapseSlot = 2               -- 黑洞坍缩器的槽位
  
  
-local maxTime = 300                 -- 黑洞稳定时间过长，重启黑洞的时间
+local maxTime = 300                 -- 黑洞稳定时间过长，空闲后重启黑洞的时间
 -- ============================================
  
 local machineList = {}
@@ -107,7 +107,13 @@ local function getStabilityInfo()
 end
  
 local function turnOff()
+    -- 禁止机器接取新配方，但不会中断当前配方。
+    -- 调用方已经等稳定度降到约 9%；若仍有配方，则保持时空供给直到它自然结束。
     setWorkAllowed(false)
+    if getAnyProgress() then
+        redstone.setOutput(rsSideSpcaeTime, 15)
+    end
+    maxProgress = 0
     for _, address in ipairs(machineList) do
         local progress = component.invoke(address, "getWorkMaxProgress") - component.invoke(address, "getWorkProgress")
         if progress > maxProgress then
@@ -115,12 +121,13 @@ local function turnOff()
         end
     end
     time2 = computer.uptime()
-    transposer.transferItem(sourceSide, targetSide, #machineList, collapseSlot, 2)
     getInfo = function() return "等待配方结束 ("..tostring(math.floor(computer.uptime() - time2)).."/"..tostring(math.ceil(maxProgress/20))..")" end
     while getAnyProgress() do
         os.sleep(1)
     end
     getInfo = empty
+    -- 当前配方全部完成后，才允许投入坍缩器关闭黑洞。
+    transposer.transferItem(sourceSide, targetSide, #machineList, collapseSlot, 2)
     setWorkAllowed(true)
     os.sleep(0.5)
     setWorkAllowed(false)
@@ -154,6 +161,12 @@ local function main()
             while computer.uptime() < time1 + 90 do
                 os.sleep(1)
                 if me_controller.getItemsInNetwork()[1] == nil and me_controller.getFluidsInNetwork()[1] == nil then
+                    -- 输入可能只是被最后一个配方取走。只要配方还在运行，就继续等稳定度
+                    -- 降到约 9%（90 秒）；配方若提前完成则无需通入时空。
+                    status = "[等待稳定度]"
+                    while computer.uptime() < time1 + 90 and getAnyProgress() do
+                        os.sleep(1)
+                    end
                     status = "[关闭中]"
                     turnOff()
                     status = "[空闲]"
@@ -165,6 +178,8 @@ local function main()
             getInfo = function() return "正在运行 ("..tostring(math.floor(computer.uptime() - time1)).."/"..tostring(maxTime)..")" end
             while me_controller.getItemsInNetwork()[1] ~= nil or me_controller.getFluidsInNetwork()[1] ~= nil do
                 if computer.uptime() >= time1 + maxTime then
+                    -- 300 秒只是重启请求，不是配方超时。先禁止接取新配方，
+                    -- 保持时空供给等待当前配方结束，之后再投入坍缩器。
                     status = "[重启中]"
                     turnOff()
                     goto redo

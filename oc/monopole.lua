@@ -40,51 +40,60 @@ end
 function clearCacheBuffer()     -- Magnetic Matter always outputs one dust and two fluids, so this cleanup logic is fixed
     trans.transferItem(sideCacheBuffer, sideAEInfusion, _, 1)
 end
- 
-function requestItem(item)
+
+function ensureInterfaceMarker(cycle)
+    local ok, configured = pcall(
+        mei.setFluidInterfaceConfiguration,
+        0,
+        database.address,
+        1
+    )
+    if not ok or configured == false then
+        print(string.format(
+            "[cycle %d] failed to restore interface marker: %s",
+            cycle,
+            tostring(configured)
+        ))
+        return false
+    end
+    return true
+end
+
+function requestItem(item, cycle)
     local shouldReportMissingPattern = true
-    local cacheN = 0        -- Count failed crafting requests and use the count as the cancellation threshold
     while true do
-        local craftable = mei.getCraftables({name=item.name, label=item.label})[1]
+        -- The AE network and its interface can restart while the OC computer keeps
+        -- running. Reapply the marker whenever the network becomes available again.
+        ensureInterfaceMarker(cycle)
 
-        if trans.getFluidInTank(sideInterface, 1).amount >= 8000 then return end     -- Avoid an infinite loop caused by AE latency
+        if tankAmount(sideInterface, 1) > 0 then return end
 
-        if not craftable then   -- Wait for the player to check the crafting pattern
+        local queryOk, craftables = pcall(mei.getCraftables, {name=item.name, label=item.label})
+        local craftable = queryOk and craftables and craftables[1] or nil
+
+        if not craftable then   -- The AE network may still be starting, or the pattern may be missing
             if shouldReportMissingPattern then
                 shouldReportMissingPattern = false
-                print("No matching fluid drop is craftable for " .. item.label .. "; please check the pattern. Waiting...")
+                print("No matching fluid drop is craftable for " .. item.label .. "; AE may be restarting. Waiting...")
             end
             os.sleep(5)
         else
-            local result = craftable.request(1, true)      -- Submit the crafting request
+            local requestOk, result = pcall(craftable.request, 1, true)
             shouldReportMissingPattern = true
-            print("Crafting request submitted for", item.label)
-            os.sleep(2)
+            if requestOk and result ~= nil then
+                print("Crafting request submitted for", item.label)
 
-            if result.hasFailed() or result.isCanceled() then
-                print("Crafting request failed; retrying in 5 seconds")
-                cacheN = cacheN + 1
-                if cacheN >= 12 then
-                    os.sleep(20)
-                    if cacheN > 15 then
-                        print("A critical error occurred; manual intervention is required...")
-                        while true do os.sleep(5) end
-                    end
-                    local cpus = mei.getCpus()
-                    for i=1,#cpus do     -- Too many failures may indicate an AE issue; try canceling the request first
-                        local out = cpus[i].cpu.finalOutput()
-                        if out == nil then break end
-                        if out.name == item.name and out.label == item.label then
-                            cpus[i].cpu.cancel()
-                        end
-                    end
-                end
-                os.sleep(5)
-            else
-                while not result.isDone() do
+                -- A valid AE job can remain queued indefinitely. Once submission is
+                -- confirmed, never infer failure from elapsed time or submit a
+                -- duplicate job. Wait only for the requested fluid to materialize.
+                while tankAmount(sideInterface, 1) == 0 do
                     os.sleep(2)
+                    ensureInterfaceMarker(cycle)
                 end
                 return
+            else
+                print("Crafting request was not submitted; AE may be restarting. Retrying in 5 seconds")
+                os.sleep(5)
             end
         end
     end
@@ -92,7 +101,11 @@ end
 
 function waitForInterfaceFluid(cycle)
     while tankAmount(sideInterface, 1) == 0 do
-        requestItem(database.get(1))
+        ensureInterfaceMarker(cycle)
+        os.sleep(0.25)
+        if tankAmount(sideInterface, 1) > 0 then return end
+
+        requestItem(database.get(1), cycle)
         if tankAmount(sideInterface, 1) == 0 then
             print("[cycle " .. tostring(cycle) .. "] fluid still empty after request, retry")
         end
@@ -136,7 +149,7 @@ function main()
             os.sleep(0.25)
 
             print("[cycle " .. tostring(cycle) .. "] start plasma transfer")
-            mei.setFluidInterfaceConfiguration(0, database.address, 1)
+            ensureInterfaceMarker(cycle)
             os.sleep(0.25)
 
             waitForInterfaceFluid(cycle)

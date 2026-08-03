@@ -71,13 +71,13 @@ local FLUID_CONFIGS = {
     {"methane", "1g", 5, 9},
     {"argon", "100m", 5, 7},
     {"radon", "100g", 8, 6},
-    {"xenon", "20g", 6, 4},
+    {"xenon", "200g", 6, 4},
     {"krypton", "100g", 5, 8},
     {"molten.lead", "4g", 4, 5},
     {"chlorobenzene", "100m", 2, 1},
     {"endergoo", "500m", 3, 1},
-    {"molten.copper", "240g", 8, 3},
-    {"molten.iron", "240g", 4, 2},
+    {"molten.iron", "200g", 4, 2},
+    {"molten.copper", "999t", 8, 3},
 }
  
 -- 多台机器地址和等级: {地址, 等级}
