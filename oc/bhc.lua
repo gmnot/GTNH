@@ -10,7 +10,8 @@ local seedSlot = 1                   -- 黑洞种子的槽位
 local collapseSlot = 2               -- 黑洞坍缩器的槽位
  
  
-local maxTime = 300                 -- 黑洞稳定时间过长，空闲后重启黑洞的时间
+local maxTime = 300                  -- 黑洞稳定时间过长，空闲后重启黑洞的时间
+local catalystSettleTime = 1         -- 催化物离开转运库存后，额外留给机器处理的时间
 -- ============================================
  
 local machineList = {}
@@ -76,6 +77,43 @@ local function formatStack(stack, amountKey)
     return tostring(label).." x"..tostring(amount)
 end
 
+local function getCatalystCount(reference)
+    local count = 0
+    for _, stack in ipairs(me_controller.getItemsInNetwork()) do
+        if stack.name == reference.name and stack.damage == reference.damage then
+            count = count + (stack.size or stack.amount or 0)
+        end
+    end
+    local targetStack = transposer.getStackInSlot(targetSide, 2)
+    if targetStack ~= nil and targetStack.name == reference.name and targetStack.damage == reference.damage then
+        count = count + (targetStack.size or targetStack.amount or 0)
+    end
+    return count
+end
+
+-- 每次只启用一台机器并投入一个，防止某台机器吃掉多份催化物。
+local function sendCatalystToAll(sourceSlot, action)
+    setWorkAllowed(false)
+    for i, address in ipairs(machineList) do
+        local reference = transposer.getStackInSlot(sourceSide, sourceSlot)
+        while reference == nil or transposer.transferItem(sourceSide, targetSide, 1, sourceSlot, 2) ~= 1 do
+            status = "[等待转运]"
+            getInfo = function() return action.."受阻 (M"..tostring(i)..")" end
+            os.sleep(0.5)
+            reference = transposer.getStackInSlot(sourceSide, sourceSlot)
+        end
+        status = "[切换黑洞]"
+        getInfo = function() return action.." M"..tostring(i).."/"..tostring(#machineList) end
+        component.invoke(address, "setWorkAllowed", true)
+        while getCatalystCount(reference) > 0 do
+            os.sleep(0.2)
+        end
+        os.sleep(catalystSettleTime)
+        component.invoke(address, "setWorkAllowed", false)
+    end
+    getInfo = empty
+end
+
 local function getProgressLines()
     local lines = {"Progress:"}
     for i, address in ipairs(machineList) do
@@ -106,13 +144,10 @@ local function getStabilityInfo()
     return lines
 end
  
-local function turnOff()
+local function turnOff(spaceTimeDeadline)
     -- 禁止机器接取新配方，但不会中断当前配方。
-    -- 调用方已经等稳定度降到约 9%；若仍有配方，则保持时空供给直到它自然结束。
+    -- 稳定度降到约 9% 后若配方仍在运行，则保持时空供给直到它自然结束。
     setWorkAllowed(false)
-    if getAnyProgress() then
-        redstone.setOutput(rsSideSpcaeTime, 15)
-    end
     maxProgress = 0
     for _, address in ipairs(machineList) do
         local progress = component.invoke(address, "getWorkMaxProgress") - component.invoke(address, "getWorkProgress")
@@ -123,14 +158,13 @@ local function turnOff()
     time2 = computer.uptime()
     getInfo = function() return "等待配方结束 ("..tostring(math.floor(computer.uptime() - time2)).."/"..tostring(math.ceil(maxProgress/20))..")" end
     while getAnyProgress() do
-        os.sleep(1)
+        if spaceTimeDeadline ~= nil and computer.uptime() >= spaceTimeDeadline then
+            redstone.setOutput(rsSideSpcaeTime, 15)
+        end
+        os.sleep(0.5)
     end
     getInfo = empty
-    -- 当前配方全部完成后，才允许投入坍缩器关闭黑洞。
-    transposer.transferItem(sourceSide, targetSide, #machineList, collapseSlot, 2)
-    setWorkAllowed(true)
-    os.sleep(0.5)
-    setWorkAllowed(false)
+    sendCatalystToAll(collapseSlot, "投入坍缩器")
     redstone.setOutput(rsSideSpcaeTime, 0)
 end
  
@@ -153,7 +187,15 @@ local function main()
             end
         end
         if me_controller.getItemsInNetwork()[1] ~= nil or me_controller.getFluidsInNetwork()[1] ~= nil then
-            transposer.transferItem(sourceSide, targetSide, #machineList, seedSlot, 2)
+            -- 兼容旧版故障现场：若子网里还有坍缩器，先逐台关机归一化状态，
+            -- 否则 BHC 会优先吃掉随后投入的种子，造成部分机器仍然没有黑洞。
+            local collapseReference = transposer.getStackInSlot(sourceSide, collapseSlot)
+            if collapseReference ~= nil and getCatalystCount(collapseReference) > 0 then
+                status = "[恢复状态]"
+                sendCatalystToAll(collapseSlot, "清理残留坍缩器")
+            end
+            status = "[启动中]"
+            sendCatalystToAll(seedSlot, "投入黑洞种子")
             setWorkAllowed(true)
             status = "[运行中]"
             time1 = computer.uptime()
@@ -161,14 +203,9 @@ local function main()
             while computer.uptime() < time1 + 90 do
                 os.sleep(1)
                 if me_controller.getItemsInNetwork()[1] == nil and me_controller.getFluidsInNetwork()[1] == nil then
-                    -- 输入可能只是被最后一个配方取走。只要配方还在运行，就继续等稳定度
-                    -- 降到约 9%（90 秒）；配方若提前完成则无需通入时空。
-                    status = "[等待稳定度]"
-                    while computer.uptime() < time1 + 90 and getAnyProgress() do
-                        os.sleep(1)
-                    end
+                    -- 立刻禁止接取新配方；当前配方可继续运行。若超过 90 秒才供给时空。
                     status = "[关闭中]"
-                    turnOff()
+                    turnOff(time1 + 90)
                     status = "[空闲]"
                     goto redo
                 end

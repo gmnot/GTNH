@@ -47,37 +47,37 @@ end
  
 -- 配置: {流体注册名, 缓存阈值(mB), 行星, 气体}; 阈值支持 k/m/g/t 后缀
 local FLUID_CONFIGS = {       
-    {"liquidair", "8g", 8, 2},
-    {"molten.copper", "40g", 8, 3},
-    {"molten.iron", "40g", 4, 2},
-    {"hydrogen", "100g", 8, 1},
-    {"helium", "60g", 5, 4},
-    {"fluorine", "30g", 7, 2},
-    {"hydrofluoricacid_gt5u", "30g", 7, 1},
-    {"oxygen", "80g", 7, 4},
-    {"ic2distilledwater", "30g", 8, 5},
-    {"saltwater", "30g", 5, 3},
-    {"sulfuricacid", "30g", 4, 1},
-    {"liquid_heavy_oil", "40g", 4, 4},
-    {"oil", "30g", 4, 3},
-    {"helium-3", "30g", 5, 2},
-    {"deuterium", "30g", 6, 1},
-    {"tritium", "30g", 6, 2},
-    {"nitrogen", "100g", 7, 3},
-    {"ammonia", "30g", 6, 3},
-    {"ethylene", "2g", 6, 5},
+    {"liquidair", "12g", 8, 2},
+    {"molten.copper", "50g", 8, 3},
+    {"molten.iron", "50g", 4, 2},
+    {"hydrogen", "300g", 8, 1},
+    {"helium", "150g", 5, 4},
+    {"fluorine", "100g", 7, 2},
+    {"hydrofluoricacid_gt5u", "100g", 7, 1},
+    {"oxygen", "300g", 7, 4},
+    {"ic2distilledwater", "50g", 8, 5},
+    {"saltwater", "50g", 5, 3},
+    {"sulfuricacid", "100g", 4, 1},
+    {"liquid_heavy_oil", "50g", 4, 4},
+    {"oil", "50g", 4, 3},
+    {"helium-3", "50g", 5, 2},
+    {"deuterium", "50g", 6, 1},
+    {"tritium", "50g", 6, 2},
+    {"nitrogen", "300g", 7, 3},
+    {"ammonia", "50g", 6, 3},
+    {"ethylene", "5g", 6, 5},
     -- {"unknowwater", "2g", 8, 4},
     {"lava", "1g", 3, 3},
     {"methane", "1g", 5, 9},
-    {"argon", "100m", 5, 7},
-    {"radon", "100g", 8, 6},
+    {"argon", "1g", 5, 7},
+    {"radon", "300g", 8, 6},
     {"xenon", "200g", 6, 4},
     {"krypton", "100g", 5, 8},
-    {"molten.lead", "4g", 4, 5},
-    {"chlorobenzene", "100m", 2, 1},
+    {"molten.lead", "10g", 4, 5},
+    {"chlorobenzene", "1g", 2, 1},
     {"endergoo", "500m", 3, 1},
-    {"molten.iron", "200g", 4, 2},
-    {"molten.copper", "999t", 8, 3},
+    {"molten.iron", "400g", 4, 2},
+    {"molten.copper", "600g", 8, 3},
 }
  
 -- 多台机器地址和等级: {地址, 等级}
@@ -87,6 +87,9 @@ local MACHINES = {
  
 local AUTO_DISCOVER_MACHINES, DEFAULT_MACHINE_LEVEL = true, 2
 local CHECK_INTERVAL, MAX_STOP_WAIT = 60, 60
+-- 动态阈值按 1.0、1.3、1.6……逐档提高；基础阈值低于 250g 时目标最多为 250g。
+local THRESHOLD_MULTIPLIER_START, THRESHOLD_MULTIPLIER_STEP = 1.0, 0.3
+local SMALL_THRESHOLD_CAP = 250e9
 
 local suffixMultipliers = {k = 1e3, m = 1e6, g = 1e9, t = 1e12}
 local function parseNumberWithSuffix(value)
@@ -109,6 +112,7 @@ if not component.isAvailable("me_interface") then
     print("错误：未检测到ME接口，脚本终止") os.exit()
 end
 for _, config in ipairs(FLUID_CONFIGS) do if type(config[2]) == "string" then config[2] = parseNumberWithSuffix(config[2]) end end
+local thresholdMultiplier = THRESHOLD_MULTIPLIER_START
 local gt_machines, machineAddresses, machineLevels, discoveredMachines = {}, {}, {}, {}
 local machineCount = 0
 
@@ -141,19 +145,49 @@ for _, machineInfo in ipairs(MACHINES) do
 end
 if machineCount == 0 then print("错误：未找到任何可用的太空钻机，脚本终止") os.exit() end
 print("成功初始化 " .. machineCount .. " 台钻机")
-local function getFluidAmount(fluidName)
+local function getFluidAmounts()
+    local amounts = {}
     local fluids = component.me_interface.getFluidsInNetwork()
-    for _, fluid in ipairs(fluids) do if fluid.name == fluidName then return tonumber(fluid.amount) or 0 end end
-    return 0
+    for _, fluid in ipairs(fluids) do
+        if fluid.name then amounts[fluid.name] = tonumber(fluid.amount) or 0 end
+    end
+    return amounts
 end
-local function anyFluidNeedsRefill(ignoreFluid)
+
+local function targetAmountFor(config, multiplier)
+    local baseAmount = config[2]
+    if baseAmount == -1 then return -1 end
+    local targetAmount = baseAmount * multiplier
+    if baseAmount < SMALL_THRESHOLD_CAP then targetAmount = math.min(targetAmount, SMALL_THRESHOLD_CAP) end
+    return targetAmount
+end
+
+local function anyFluidNeedsRefill(amounts, multiplier, ignoreFluid)
     for _, config in ipairs(FLUID_CONFIGS) do
         if config[2] ~= -1 and config[1] ~= ignoreFluid then
-            local amount = getFluidAmount(config[1])
-            if amount < config[2] then return true, config, amount, config[2] end
+            local amount = amounts[config[1]] or 0
+            local targetAmount = targetAmountFor(config, multiplier)
+            if amount < targetAmount then return true, config, amount, targetAmount end
         end
     end
     return false, nil
+end
+
+local function supportedMultiplier(amounts, currentMultiplier)
+    local supported = currentMultiplier
+    for _, config in ipairs(FLUID_CONFIGS) do
+        local baseAmount = config[2]
+        if baseAmount ~= -1 then
+            local amount = amounts[config[1]] or 0
+            local targetAmount = targetAmountFor(config, currentMultiplier)
+            if amount < targetAmount then
+                local steps = math.floor(((amount / baseAmount) - THRESHOLD_MULTIPLIER_START + 1e-9) / THRESHOLD_MULTIPLIER_STEP)
+                local fluidSupported = THRESHOLD_MULTIPLIER_START + math.max(0, steps) * THRESHOLD_MULTIPLIER_STEP
+                supported = math.min(supported, fluidSupported)
+            end
+        end
+    end
+    return supported
 end
 
 local function safelyStopMachine(machine)
@@ -195,11 +229,27 @@ local function adjustAllMachinesParameters(param1, param2)
     end
     return successCount
 end
+
 local function checkAllFluids()
-    local needsRefill, refillConfig, currentAmount, targetAmount = anyFluidNeedsRefill()
+    local amounts = getFluidAmounts()
+    local needsRefill = anyFluidNeedsRefill(amounts, thresholdMultiplier)
+    if needsRefill then
+        local oldMultiplier = thresholdMultiplier
+        thresholdMultiplier = supportedMultiplier(amounts, thresholdMultiplier)
+        if thresholdMultiplier < oldMultiplier then
+            print(string.format("库存未达到当前档位，阈值系数 %.1f -> %.1f", oldMultiplier, thresholdMultiplier))
+        end
+    else
+        local oldMultiplier = thresholdMultiplier
+        thresholdMultiplier = thresholdMultiplier + THRESHOLD_MULTIPLIER_STEP
+        print(string.format("所有流体达到 %.1f 倍阈值，阈值系数提高到 %.1f", oldMultiplier, thresholdMultiplier))
+    end
+
+    local refillConfig, currentAmount, targetAmount
+    needsRefill, refillConfig, currentAmount, targetAmount = anyFluidNeedsRefill(amounts, thresholdMultiplier)
     if needsRefill then
         local fluidName = refillConfig[1]
-        print(string.format("检测到需要补充的流体: %s, 当前 %s / 目标 %s", fluidName, formatNumberReadable(currentAmount), formatNumberReadable(targetAmount)))
+        print(string.format("检测到需要补充的流体: %s, 当前 %s / 目标 %s (系数 %.1f)", fluidName, formatNumberReadable(currentAmount), formatNumberReadable(targetAmount), thresholdMultiplier))
         local successCount = adjustAllMachinesParameters(refillConfig[3], refillConfig[4])
         if successCount > 0 then
             print(string.format("已调整 %d 台机器参数以补充 %s", successCount, fluidName))
@@ -223,6 +273,7 @@ end
 local function main()
     print("太空钻机流体监控系统启动")
     print(string.format("间隔:%ds\n流体:%d\n机器:%d", CHECK_INTERVAL, #FLUID_CONFIGS, #gt_machines))
+    print(string.format("动态阈值: 初始 %.1f 倍，每次增加 %.1f；低阈值封顶 %s", THRESHOLD_MULTIPLIER_START, THRESHOLD_MULTIPLIER_STEP, formatNumberReadable(SMALL_THRESHOLD_CAP)))
     for i, machine in ipairs(gt_machines) do
         local address = machineAddresses[i] or tostring(machine.address)
         local level = machineLevels[address] or 1
