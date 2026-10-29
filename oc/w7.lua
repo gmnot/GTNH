@@ -1,4 +1,6 @@
-﻿local os = require("os")
+﻿-- for 2.9.0 beta3
+
+local os = require("os")
 local component = require("component")
 local sides = require("sides")
 local term = require("term")
