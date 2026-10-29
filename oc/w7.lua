@@ -3,7 +3,6 @@
 local os = require("os")
 local component = require("component")
 local sides = require("sides")
-local term = require("term")
  
 local transposer = component.transposer
 local gtm = component.gt_machine
@@ -212,7 +211,7 @@ local function main()
     end
     
     if signalStrength ~= lastSignalStrength then
-      term.clear()
+      print("----------------------------------------")
       print("Red Stone Signal Changed: " .. lastSignalStrength .. " -> " .. signalStrength)
       printReadableFluids()
       lastSignalStrength = signalStrength  -- Update the last signal value.
