@@ -16,7 +16,7 @@ local UMV = "molten.superconductorumvbase"
 local inputSide = sides.down                      -- Redstone signal input side
 local fluidInputSides = {sides.north, sides.up}   -- Fluid input sides
 local targetSide = sides.down                     -- Fluid output side
-local superconductor = UHV   -- Superconductor tier
+local superconductor = UV   -- Superconductor tier
 
 local sideNames = {
   [sides.down] = "down",
