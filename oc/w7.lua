@@ -230,7 +230,7 @@ local function main()
       os.sleep(120)
     else
       print("All fluids available")
-      gtm.setWorkAllowed(true)
+      -- since using center ctrl, can't turn on myself
 
       if signalStrength >= 8 then
         print("  Bit #4 is set. Standby..")
