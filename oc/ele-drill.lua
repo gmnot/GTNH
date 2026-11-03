@@ -108,20 +108,19 @@ local function formatNumberReadable(number)
     end
     return tostring(number)
 end
--- MFU 绑定的接口可能不以 me_interface 类型暴露，按方法查找。
+-- 与 water5.lua 一样，直接获取二合一接口的代理。
 local meInterface, meAddress
-for address in component.list() do
-    local ok, methods = pcall(component.methods, address)
-    if ok and methods and methods.getFluidsInNetwork then
-        local proxyOk, proxy = pcall(component.proxy, address)
-        if proxyOk and proxy then
-            meInterface, meAddress = proxy, address
-            break
-        end
-    end
+for address in component.list("fluid_interface", true) do
+    meInterface, meAddress = component.proxy(address), address
+    break
 end
 if not meInterface then
-    print("错误：未找到提供 getFluidsInNetwork 的 ME 接口；请检查 MFU 绑定和网络连接") os.exit()
+    print("错误：未找到 fluid_interface（二合一接口）")
+    print("当前 OC 可见组件:")
+    for address, componentType in component.list() do
+        print("  " .. tostring(componentType) .. " " .. tostring(address))
+    end
+    os.exit()
 end
 print("使用 ME 接口: " .. meAddress)
 for _, config in ipairs(FLUID_CONFIGS) do if type(config[2]) == "string" then config[2] = parseNumberWithSuffix(config[2]) end end
@@ -132,8 +131,9 @@ local machineCount = 0
 local function addMachine(address, level, message)
     local success, machine = pcall(component.proxy, address)
     if not (success and machine) then return false end
-    local methodsOk, methods = pcall(component.methods, address)
-    if not (methodsOk and methods and methods.setParameters and methods.setWorkAllowed and methods.isMachineActive) then return false end
+    -- 太空电梯还有采矿模块；此脚本只控制负责流体的钻井模块。
+    local nameOk, machineName = pcall(machine.getName)
+    if not (nameOk and tostring(machineName):match("projectmodulepump")) then return false end
     local machineAddress = machine.address or address
     if not discoveredMachines[machineAddress] then
         table.insert(gt_machines, machine)
@@ -147,8 +147,8 @@ local function addMachine(address, level, message)
 end
 
 if AUTO_DISCOVER_MACHINES then
-    -- MFU 绑定的机器可能使用其他组件类型；按控制方法识别。
-    for address in component.list() do
+    -- 与 water5.lua 一样，机器按 gt_machine 组件类型发现。
+    for address in component.list("gt_machine", true) do
         addMachine(address, DEFAULT_MACHINE_LEVEL, "Found machine: %s (level %d)")
     end
 end
@@ -159,11 +159,21 @@ for _, machineInfo in ipairs(MACHINES) do
         print("警告: 无法访问机器 " .. address)
     end
 end
-if machineCount == 0 then print("错误：未找到任何可用的太空钻机，脚本终止") os.exit() end
+if machineCount == 0 then
+    print("错误：未找到太空电梯钻井模块 projectmodulepump")
+    print("当前 OC 可见组件:")
+    for address, componentType in component.list() do
+        print("  " .. tostring(componentType) .. " " .. tostring(address))
+    end
+    os.exit()
+end
 print("成功初始化 " .. machineCount .. " 台钻机")
 local function getFluidAmounts()
     local amounts = {}
-    local fluids = meInterface.getFluidsInNetwork()
+    local ok, fluids = pcall(meInterface.getFluidsInNetwork)
+    if not ok or type(fluids) ~= "table" then
+        error("无法读取 ME 网络流体: " .. tostring(fluids))
+    end
     for _, fluid in ipairs(fluids) do
         if fluid.name then amounts[fluid.name] = tonumber(fluid.amount) or 0 end
     end
@@ -228,8 +238,13 @@ local function adjustMachineParameters(machine, level, param1, param2)
     if not safelyStopMachine(machine) then print("无法停止机器，参数调整取消") return false end
     local success = true
     for _, hatch in ipairs(level == 1 and {0} or {0, 2, 4, 6}) do
-        success = success and pcall(machine.setParameters, hatch, 0, param1)
-        success = success and pcall(machine.setParameters, hatch, 1, param2)
+        for parameter, value in ipairs({param1, param2}) do
+            local ok, result = pcall(machine.setParameters, hatch, parameter - 1, value)
+            if not ok or result == false then
+                print(string.format("参数写入失败: 组 %d 参数 %d 值 %s: %s", hatch, parameter - 1, tostring(value), tostring(result)))
+                success = false
+            end
+        end
     end
     if success then machine.setWorkAllowed(true) return true end
     print("机器参数调整失败") return false
