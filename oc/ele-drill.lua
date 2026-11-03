@@ -108,9 +108,22 @@ local function formatNumberReadable(number)
     end
     return tostring(number)
 end
-if not component.isAvailable("me_interface") then
-    print("错误：未检测到ME接口，脚本终止") os.exit()
+-- MFU 绑定的接口可能不以 me_interface 类型暴露，按方法查找。
+local meInterface, meAddress
+for address in component.list() do
+    local ok, methods = pcall(component.methods, address)
+    if ok and methods and methods.getFluidsInNetwork then
+        local proxyOk, proxy = pcall(component.proxy, address)
+        if proxyOk and proxy then
+            meInterface, meAddress = proxy, address
+            break
+        end
+    end
 end
+if not meInterface then
+    print("错误：未找到提供 getFluidsInNetwork 的 ME 接口；请检查 MFU 绑定和网络连接") os.exit()
+end
+print("使用 ME 接口: " .. meAddress)
 for _, config in ipairs(FLUID_CONFIGS) do if type(config[2]) == "string" then config[2] = parseNumberWithSuffix(config[2]) end end
 local thresholdMultiplier = THRESHOLD_MULTIPLIER_START
 local gt_machines, machineAddresses, machineLevels, discoveredMachines = {}, {}, {}, {}
@@ -118,7 +131,9 @@ local machineCount = 0
 
 local function addMachine(address, level, message)
     local success, machine = pcall(component.proxy, address)
-    if not (success and machine and machine.type == "gt_machine") then return false end
+    if not (success and machine) then return false end
+    local methodsOk, methods = pcall(component.methods, address)
+    if not (methodsOk and methods and methods.setParameters and methods.setWorkAllowed and methods.isMachineActive) then return false end
     local machineAddress = machine.address or address
     if not discoveredMachines[machineAddress] then
         table.insert(gt_machines, machine)
@@ -132,7 +147,8 @@ local function addMachine(address, level, message)
 end
 
 if AUTO_DISCOVER_MACHINES then
-    for address in component.list("gt_machine", true) do
+    -- MFU 绑定的机器可能使用其他组件类型；按控制方法识别。
+    for address in component.list() do
         addMachine(address, DEFAULT_MACHINE_LEVEL, "Found machine: %s (level %d)")
     end
 end
@@ -147,7 +163,7 @@ if machineCount == 0 then print("错误：未找到任何可用的太空钻机�
 print("成功初始化 " .. machineCount .. " 台钻机")
 local function getFluidAmounts()
     local amounts = {}
-    local fluids = component.me_interface.getFluidsInNetwork()
+    local fluids = meInterface.getFluidsInNetwork()
     for _, fluid in ipairs(fluids) do
         if fluid.name then amounts[fluid.name] = tonumber(fluid.amount) or 0 end
     end
